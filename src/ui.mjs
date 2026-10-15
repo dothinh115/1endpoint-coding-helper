@@ -199,7 +199,7 @@ export async function readApiKey({ input = process.stdin, output = process.stdou
       for (const event of ['error', 'end', 'close']) input.on(event, onFailure)
       output.on('error', onFailure)
       input.setRawMode(true)
-      output.write('\u001b[?2004h' + (language === 'vi' ? 'Dán khóa API (ẩn): ' : 'Paste API key (masked): '))
+      output.write('\u001b[?2004h' + (language === 'vi' ? 'Dán khóa API: ' : 'Paste API key: '))
       input.resume()
     } catch { finish(uiError()) }
   })
@@ -263,7 +263,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       if (action !== 'run' || !available) {
         while (true) {
           const keyAction = await choose(t('API key', 'Khóa API'), [
-            { label: t('Paste key (masked)', 'Dán khóa (ẩn)'), value: 'paste' },
+            { label: t('Paste API key', 'Dán khóa API'), value: 'paste' },
             { label: t('Open Console create API key', 'Mở Console tạo khóa API'), value: 'open', description: t('Enter opens the API keys page', 'Enter mở trang khóa API') },
             ...(available ? [{ label: t('Use existing saved/environment key', 'Dùng khóa đã lưu hoặc biến môi trường'), value: 'existing' }] : []),
             { label: t('Skip; use environment key later', 'Bỏ qua; dùng khóa môi trường sau'), value: 'skip' },
@@ -283,13 +283,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
             output.write(error.message + '\n'); continue
           }
           output.write(t('Local keys are plaintext, mode 0600: accessible to your user account, not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần, quyền 0600: tài khoản của bạn có thể đọc, không được mã hóa.\n'))
-          const storage = await choose(t('Key storage', 'Lưu khóa'), [
-            { label: t('Save locally', 'Lưu cục bộ'), value: 'save' },
-            { label: t('This run only', 'Chỉ lần chạy này'), value: 'session' },
-            { label: t('Cancel', 'Hủy'), value: 'cancel' }
-          ])
-          if (storage === 'cancel') return
-          context.apiKey = key; context.saveKey = storage === 'save'
+          context.apiKey = key; context.saveKey = true
           break
         }
       }
@@ -366,14 +360,6 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       const warning = t(`Restart your ${tool === 'dsh' ? 'DSH' : 'Claude Code'} session to apply. Existing sessions do not update automatically. Start a new session through coding-helper.\n`, `Khởi động lại phiên ${tool === 'dsh' ? 'DSH' : 'Claude Code'} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới thông qua coding-helper.\n`)
       const colored = colorize(warning, 'warning', { output })
       output.write(colored === warning ? warning : `\u001b[1m${colored}\u001b[0m`)
-    }
-    if ((action === 'setup' || action === 'reconfigure') && context.apiKey && !context.saveKey) {
-      output.write(t('This key is only available now. Paste it again when reopening coding-helper.\n', 'Khóa chỉ có trong lần chạy này. Dán lại khi mở coding-helper lần sau.\n'))
-      const launch = await choose(t('Start a new session?', 'Mở phiên mới?'), [
-        { label: t('Finish', 'Hoàn tất'), value: false },
-        { label: t('Start new session now (may incur charges)', 'Mở phiên mới ngay (có thể phát sinh phí)'), value: true }
-      ])
-      if (launch) return dispatch(['run', '--tool', tool], { language, apiKey: context.apiKey, saveKey: false })
     }
     return result
   } catch (error) {

@@ -272,7 +272,7 @@ test('setup default paste saves only through dispatch context after explicit con
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'model' }] })
-  await keys(input, '\r', '\r', '\r', '\r', '\u001b[200~sk-private-test\u001b[201~', '\r', '\r', '\r', '\u001b[B\r')
+  await keys(input, '\r', '\r', '\r', '\r', '\u001b[200~sk-private-test\u001b[201~', '\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'model'], context: { language: 'en', apiKey: 'sk-private-test', saveKey: true } }])
   assert.doesNotMatch(text(), /sk-private-test/)
@@ -282,12 +282,11 @@ test('setup default paste saves only through dispatch context after explicit con
 
 test('cancel after paste leaves dispatcher and saved key untouched', async () => {
   const { input, output, text } = tty()
-  let dispatched = false, loaded = false
-  const pending = wizard({ input, output, dispatch: () => { dispatched = true }, loadModels: async () => { loaded = true; return [{ id: 'm' }] } })
-  await keys(input, '\r', '\r', '\r', '\r', 'secret-cancel\r', '\u001b[A\r')
+  let dispatched = false
+  const pending = wizard({ input, output, dispatch: () => { dispatched = true }, loadModels: async () => [{ id: 'm' }] })
+  await keys(input, '\r', '\r', '\r', '\r', 'secret-cancel\r', '\r', '\r')
   await pending
   assert.equal(dispatched, false)
-  assert.equal(loaded, false)
   assert.doesNotMatch(text(), /secret-cancel|Use existing saved/)
 })
 
@@ -308,21 +307,22 @@ test('run without available key asks for key and forwards run-only context', asy
   const { input, output } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }) })
-  await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\r', 'run-secret\r', '\u001b[B\r', '\r')
+  await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\r', 'run-secret\r', '\r')
   await pending
-  assert.deepEqual(calls, [{ argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'run-secret', saveKey: false } }])
+  assert.deepEqual(calls, [{ argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'run-secret', saveKey: true } }])
 })
 
-test('session-only setup offers explicit billed launch and passes key without argv', async () => {
+test('paste labels are simple and setup saves automatically without storage/session prompts', async () => {
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'm' }] })
-  await keys(input, '\r', '\r', '\r', '\r', 'session-secret\r', '\u001b[B\r', '\r', '\u001b[B\r', '\u001b[B\r')
+  await keys(input, '\u001b[B\r', '\r', '\r', '\r', 'saved-secret\r', '\r', '\u001b[B\r')
   await pending
-  assert.equal(calls.length, 2)
-  assert.deepEqual(calls[1], { argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'session-secret', saveKey: false } })
-  assert.match(text(), /may incur charges/)
-  assert.doesNotMatch(text(), /session-secret/)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].context.saveKey, true)
+  assert.equal(calls[0].context.apiKey, 'saved-secret')
+  assert.match(text(), /Dán khóa API/)
+  assert.doesNotMatch(text(), /saved-secret|\(ẩn\)|\(masked\)|Key storage|Lưu khóa|This run only|Chỉ lần chạy này|Mở phiên mới\?/)
 })
 
 test('removal explicitly chooses whether to remove the saved tool key', async () => {

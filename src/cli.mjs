@@ -26,7 +26,7 @@ Claude setup/reconfigure accepts --haiku-model ID --sonnet-model ID --opus-model
 and optional --fable-model ID for supporting versions. --model is the main/default fallback.
 Node.js >=22.19 is required.
 Paste your API key privately in the menu, or press Enter on Open Console to create one.
-Choose private local storage or session-only use. Saved keys are plaintext private files, not encrypted.
+Pasted keys are saved automatically for the selected tool. Saved files are private plaintext, not encrypted.
 ONEENDPOINT_API_KEY remains an optional environment override; never pass keys as arguments.
 State: ONEENDPOINT_HELPER_HOME or ~/.1endpoint/coding-helper (isolated tool homes).
 No existing DSH/Claude settings are edited. Setup/doctor make no API requests.

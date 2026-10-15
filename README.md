@@ -19,10 +19,9 @@ npx @1endpoint/coding-helper
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
 3. Select **DSH** or **Claude Code**.
-4. Paste your API key into the masked prompt, or select **Open Console** and press Enter to create a key first.
-5. Choose whether to save the key locally or use it for this session only.
-6. Select models from the 1endpoint catalog.
-7. Review the selection, then choose **Confirm**.
+4. Paste your API key, or select **Open Console** and press Enter to create a key first.
+5. Select models from the 1endpoint catalog.
+6. Review the selection, then choose **Confirm**. The key is saved automatically for the selected tool.
 
 Use **↑ / ↓** to move and **Enter** to select. Press **Escape** to cancel. Confirmation is a selection, not a typed `y/n` answer.
 
@@ -40,11 +39,9 @@ Paste your key directly into the helper's **masked API-key prompt**. The key is 
 
 Need a key? Select **Open Console** and press **Enter**. The helper opens [API keys](https://console.1endpoint.dev/api-keys), or the [Vietnamese API-key page](https://console.1endpoint.dev/vi/api-keys) when Vietnamese is selected. Create a key, copy it, return to the terminal and paste it into the prompt.
 
-Choose how to use the key:
+The key is saved automatically for the selected tool when setup or reconfiguration is confirmed. There is no storage-choice prompt. A key entered while starting a tool is also saved for future launches.
 
-- **Save locally:** remember it for the selected tool, so future launches do not require manual environment export. The saved file is plaintext, **not encrypted**, protected with private file permissions (0600 file, 0700 directory on POSIX systems). Other processes running as your user may still access it.
-- **This session only:** keep it in memory for this helper process. After setup, select **Start a new session now** to launch with it. Reopening the helper later requires entering the key again.
-- **Use an existing key:** reuse an available environment or saved key without displaying its value.
+The saved file is plaintext, **not encrypted**, protected with private file permissions (0600 file, 0700 directory on POSIX systems). Other processes running as your user may still access it. Keys are never displayed. If a key is already available, select **Use an existing key** to reuse it.
 
 DSH and Claude Code store their keys separately. An explicit session key takes priority, followed by `ONEENDPOINT_API_KEY`, then the selected tool's saved key. The helper never puts keys in generated tool settings, model configuration, backups or logs.
 
