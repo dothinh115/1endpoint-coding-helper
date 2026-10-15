@@ -1,123 +1,176 @@
 # @1endpoint/coding-helper
 
-Safe, isolated setup for **DeepSeek Harness** and **Claude Code CLI** using the single 1endpoint API base URL:
+Connect **DeepSeek Harness** or **Claude Code** to 1endpoint with an interactive setup menu. Choose your language, select models, and manage your connection without editing configuration files by hand.
 
-```text
-https://1endpoint.dev/api/v1
-```
+## Before you start
 
-**Release status: not yet published to npm.** The following registry commands become available only after the maintainer publishes the package. Until then, run the local executable or a reviewed tarball. This helper is an independent integration, not an official DeepSeek or Anthropic product.
+- Install **Node.js 22.19 or newer**.
+- Install [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) or [Claude Code](https://code.claude.com/docs/en/overview) separately. The helper configures these tools; it does not install them.
+- Have a 1endpoint API key ready. Keep it private: do not paste it into command arguments, shared configuration files or a repository.
 
-## Requirements
+## 1. Open the helper
 
-- Node.js **22.19 or newer** (tested locally on Node 24).
-- Install the desired coding tool separately from its official distribution. The helper does not download tools or run installation scripts.
-- An enabled public model ID from the [1endpoint model catalog](https://console.1endpoint.dev/models).
-- Set `ONEENDPOINT_API_KEY` in the launching process environment using your shell or secret manager. Never put the key in command arguments, a Git repository, or a shared configuration file.
-
-## Setup
-
-After publication:
+Run this in your terminal:
 
 ```bash
 npx @1endpoint/coding-helper
-# First choose English / Tiếng Việt, then the action.
-# Colorful menu: use ↑/↓ and Enter; Escape cancels. No typed y/n.
-# Setup, reconfigure, remove, diagnose and run are available in the menu.
-# Fetches public 1endpoint text models for selection; Claude tiers map independently.
-# Or explicit, scriptable setup:
-npx @1endpoint/coding-helper setup --tool dsh --model your-model-id --dry-run
-npx @1endpoint/coding-helper setup --tool dsh --model your-model-id
-npx @1endpoint/coding-helper setup --tool claude --model your-model-id
 ```
 
-Before publication, from the repository:
+1. Choose **English** or **Tiếng Việt**.
+2. Choose **Setup**.
+3. Select **DSH** or **Claude Code**.
+4. Select models from the 1endpoint catalog.
+5. Review the selection, then choose **Confirm**.
+
+Use **↑ / ↓** to move and **Enter** to select. Press **Escape** to cancel. Confirmation is a selection, not a typed `y/n` answer.
+
+### Choosing models
+
+For DSH, choose the model you want to use by default.
+
+For Claude Code, choose a 1endpoint model for each tier: **Haiku**, **Sonnet** and **Opus**. Each tier can use a different model. Sonnet is used as the main/default selection. Select optional **Fable** mapping only if your installed Claude Code version supports that tier; otherwise keep the standard three-tier option.
+
+If the catalog cannot be loaded, choose **Retry**, explicitly choose **Manual model ID**, or **Cancel**. The helper does not silently substitute a model.
+
+## 2. Provide your API key
+
+The helper does **not** save your API key. Set `ONEENDPOINT_API_KEY` in the terminal where you will launch the tool, using your secret manager or a hidden prompt.
+
+For **Bash**, the following prompt keeps the key out of the command itself and hides it while you type:
 
 ```bash
-yarn install --immutable
-yarn test
-node src/cli.mjs setup --tool dsh --model your-model-id --dry-run
-node src/cli.mjs setup --tool dsh --model your-model-id
+read -r -s -p "1endpoint API key: " ONEENDPOINT_API_KEY
+printf '\n'
+export ONEENDPOINT_API_KEY
 ```
 
-**After setup or reconfigure, restart the DSH/Claude Code session for changes to take effect. An already-open session does not update automatically. Start the new session through `coding-helper run`, not the original tool command, to use the isolated helper profile.**
+For another shell, use its secure environment-variable mechanism or your secret manager. Do not type a real key into a command you intend to share. A key set in one terminal is not automatically available in another terminal or after restarting the shell.
 
-The wizard begins with **English / Tiếng Việt** selection before configuration/reconfiguration/deletion. It fetches the public 1endpoint text model catalog for arrow-key choices. Claude's Haiku, Sonnet and Opus tiers can each map to a different public model; optional Fable mapping is available for versions supporting that tier. The helper does not infer vendor/model equivalence from names. If catalog loading fails, choose Retry, explicit manual ID entry, or Cancel.
+## 3. Check the connection setup
 
-Setup never asks for, reads, validates or stores your API key. It creates only helper-owned files under `~/.1endpoint/coding-helper`. Use an absolute `ONEENDPOINT_HELPER_HOME` to choose a different state directory. Dry-run makes no writes. Existing DSH and Claude user configuration is not edited or imported.
-
-## Diagnose and launch
-
-After setting the key in your process environment:
+For DSH:
 
 ```bash
-coding-helper doctor --tool dsh
-coding-helper run --tool dsh
-coding-helper run --tool dsh --profile headless -- 'Reply exactly OK'
-coding-helper doctor --tool claude
-coding-helper run --tool claude
-coding-helper run --tool claude -- -p 'Reply exactly OK'
+npx @1endpoint/coding-helper doctor --tool dsh
 ```
 
-For npx-only use, replace `coding-helper` with `npx @1endpoint/coding-helper`. For local use, replace it with `node src/cli.mjs`.
-
-`doctor` verifies owned-file integrity, CLI availability and whether the key environment variable is present. It does **not** validate credentials, make network requests, call inference, execute an apiKeyHelper or read your original tool credentials. `run` is explicit consent to launch the selected tool; tool startup and inference can contact networks and incur charges. Permission/trust prompts remain tool-owned. Authentication, provider health and real inference are separate from local configuration tests.
-
-### DeepSeek Harness
-
-- Uses a separate `DSH_HOME` plus a dedicated `--patch` overlay.
-- Configures the native `llm-pi-ai` provider with `api: openai-completions`, `baseURL` and `apiKeyEnv: ONEENDPOINT_API_KEY`.
-- Configures the native `agent-default-model` selection. No secret interpolation, custom proxy or injected agent instruction is required.
-- Supported profiles: `web`, `headless`, `acp`, `sdk`. `sdk-minimal` lacks the required entries and is deliberately rejected.
-- The helper does not reuse current sessions, plugins, model presets or provider configurations. Existing sessions can retain their own model selection; start a new session in the isolated profile.
-- DSH owns request assembly, conversation state, streaming, tool loops and permissions. The helper only sets the connection.
-- Verified configuration contract: DSH `0.2.1-alpha.3`. This prerelease contract may change. A successful dump exit code alone is insufficient: the integration tests also inspect provider and selected-model rows. The shipped Web schema dump has a separate preset/tree-carrier failure; headless schema validation is the supported check.
-
-### Claude Code CLI
-
-- Uses a separate `CLAUDE_CONFIG_DIR`, a helper-owned `--settings` file and `--setting-sources user`.
-- **Project and local settings, including their hooks and permissions, are intentionally not loaded.** This is a tradeoff for deterministic routing, not transparent preservation of project behavior. Managed/organization policy still applies and can override the connection. Do not use this mode if those project restrictions are required; configure the tool manually with your administrator instead.
-- The raw process key becomes `ANTHROPIC_AUTH_TOKEN` in the child environment only. The CLI constructs the Bearer header. No key is written to settings or included in argv.
-- Maps main, Opus, Sonnet, Haiku, optional Fable and default subagent roles. The wizard offers distinct catalog selections per tier; scripted setup accepts `--haiku-model`, `--sonnet-model`, `--opus-model` and optional `--fable-model`. `--model` is the main/default fallback; explicit role selections take priority. Without a Fable mapping it follows the Opus selection. Explicit model IDs in agent/skill definitions or managed policy are outside that default mapping; no promise is made to rewrite every model choice.
-- Clears inherited conflicting Anthropic/cloud authentication and routing variables in the child only. It does not log out, modify the parent's environment, bypass permission prompts or execute existing key helpers.
-- Uses the same universal base URL above. Claude appends `/v1/messages`, producing `/api/v1/v1/messages`, a supported gateway alias. Do not change the base to a different per-client URL.
-- Claude owns request assembly, conversation state, streaming and tool execution. Version verification and fixture boundaries are recorded in the release checklist.
-
-## Update, backup and recovery
+For Claude Code:
 
 ```bash
-coding-helper backup --tool dsh
-coding-helper reconfigure --tool dsh --model another-public-model --dry-run
-coding-helper reconfigure --tool dsh --model another-public-model
-coding-helper remove --tool dsh --dry-run
-coding-helper remove --tool dsh --yes
+npx @1endpoint/coding-helper doctor --tool claude
 ```
 
-`reconfigure` validates the unchanged helper manifest/configuration, automatically backs up the verified old connection configuration and changes the model. Legacy `setup --update` is also available. Backups contain only generated configuration, never keys. Identical setup is idempotent. Normal setup refuses unknown files, modified configuration, malformed manifests and symlink state paths. Writes use an exclusive setup lock, private file permissions and atomic replacement; failed configuration writes attempt rollback.
+Doctor checks your saved connection configuration, whether the tool is installed, and whether the key environment variable is present. It does not validate the key against the server or make an inference request.
 
-`remove` previews with `--dry-run` and requires explicit `--yes` to delete the selected tool's generated connection file and manifest. It preserves runtime homes, conversations, backups, unrelated files and all original tool settings. **Stop the corresponding tool before removing its connection configuration.** To return to normal tools, launch `dsh` or `claude` directly without the helper.
+## 4. Start a new tool session
 
-For corrupted or hand-modified helper configuration, use `coding-helper remove --tool dsh --force --yes` (or `claude`), then run setup again. Force recovery targets only the fixed helper-generated connection file and manifest, never paths read from a damaged manifest; it does not copy potentially secret-bearing tampered content into backups. Symlinks remain refused even in force mode. There is no need to find and delete configuration files manually. Runtime homes may contain tool-created conversations or credentials; they are intentionally retained, not silently wiped or backed up. Do not share or commit them. A stale setup lock still requires reviewing that no setup is active before retrying; do not defeat a live writer lock.
+**After setup or reconfiguration, close the old tool session and start a new session through the helper. An already-open session does not pick up the new connection or model mapping.**
 
-This is configuration isolation, **not an OS sandbox**. The coding tools still have their ordinary filesystem/network access and can create runtime data. No unattended install, background daemon, automatic paid smoke, telemetry or global config migration is included.
-
-## Development and packaging
+Start DSH:
 
 ```bash
-yarn install --immutable
-yarn check
-yarn test
-yarn pack --out ../coding-helper-0.1.0.tgz
+npx @1endpoint/coding-helper run --tool dsh
 ```
 
-No production dependencies and no build step. The published entry is native ESM. Package contents are allowlisted. See the [publishing guide](docs/PUBLISHING.md) for step-by-step npm authentication, first publication, verification, updates and troubleshooting. See the [release checklist](docs/RELEASE.md) for current verification boundaries. Publishing is a separate maintainer action; creating or pushing the repository does not publish npm.
+Start Claude Code:
 
-## Reference and attribution
+```bash
+npx @1endpoint/coding-helper run --tool claude
+```
 
-The onboarding/product design was reviewed against [Z.AI coding-helper](https://www.npmjs.com/package/@z_ai/coding-helper) `0.1.1`: wizard, per-tool setup and doctor. Its registry metadata labels the package Proprietary. No implementation code is copied; this is an independent implementation with an explicit test suite, no stored API keys, and no automatic tool installation. The reference has no DSH support and is not authority for the DSH configuration contract.
+You can also reopen the helper and select **Run**.
 
-Official references: [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude gateway setup](https://code.claude.com/docs/en/llm-gateway-connect), [settings](https://code.claude.com/docs/en/settings), [models](https://code.claude.com/docs/en/model-config).
+**Use the helper to launch the configured session.** Running `dsh` or `claude` directly uses the tool's ordinary configuration, not this helper connection. Tool requests may incur charges; the tool's normal permission and workspace-trust prompts remain active.
 
-## Tiếng Việt
+### Important Claude Code behavior
 
-Helper hỗ trợ ưu tiên DeepSeek Harness và Claude Code CLI; dùng một base URL chung, home riêng và API key từ biến môi trường. Không sửa cấu hình công cụ đang dùng, không lưu key, không tự cài công cụ và không tự gọi inference có phí. `setup --dry-run` xem trước; `doctor` chỉ kiểm tra cục bộ; `run` mới khởi chạy công cụ. Claude chạy ở chế độ này **không nạp settings/hook/quyền project-local**; chính sách quản trị vẫn có hiệu lực. Package chưa publish: dùng lệnh local ở trên cho tới khi maintainer phát hành. Hướng dẫn Console có cả EN/VI.
+The helper uses an isolated configuration. **Project/local settings, including their hooks and permissions, are not loaded in this mode.** Managed organization policy still applies, and the helper does not enable permission bypass. If your project requires those local restrictions or hooks, use your organization's approved configuration instead.
+
+### Important DSH behavior
+
+DSH runs with a separate home, so your ordinary sessions, plugins and provider settings are not imported or changed. Supported profiles are `web` (default), `headless`, `acp` and `sdk`; `sdk-minimal` is not supported.
+
+## Change models
+
+Open the helper again, select **Reconfigure**, choose the tool, and select new models:
+
+```bash
+npx @1endpoint/coding-helper
+```
+
+The previous connection configuration is backed up automatically. **Restart the tool session through the helper after confirming the change.**
+
+For scripted use, preview and apply a DSH model change:
+
+```bash
+npx @1endpoint/coding-helper reconfigure --tool dsh --model your-model-id --dry-run
+npx @1endpoint/coding-helper reconfigure --tool dsh --model your-model-id
+```
+
+Replace `your-model-id` with the exact public model ID you want to use. Replace `dsh` with `claude` for Claude Code. To set separate Claude tiers explicitly:
+
+```bash
+npx @1endpoint/coding-helper reconfigure --tool claude \
+  --model your-main-model-id \
+  --haiku-model your-fast-model-id \
+  --sonnet-model your-balanced-model-id \
+  --opus-model your-strong-model-id
+```
+
+An optional `--fable-model` sets Fable explicitly. Without it, Fable follows Opus. Explicit tier selections take priority over the `--model` fallback. Explicit model IDs in your own agent/skill definitions or managed policy are not rewritten by these default mappings.
+
+## Remove the connection
+
+Stop the tool session first. Open the helper, select **Remove**, choose the tool and confirm the removal. You do not need to find or delete configuration files yourself.
+
+Alternatively, preview and confirm removal:
+
+```bash
+npx @1endpoint/coding-helper remove --tool dsh --dry-run
+npx @1endpoint/coding-helper remove --tool dsh --yes
+```
+
+Use `--tool claude` for Claude Code. Removal deletes only the helper-generated connection configuration. **Your original tool settings, runtime conversations and configuration backups are preserved.** To return to your ordinary setup, launch `dsh` or `claude` directly.
+
+### Recover from damaged connection configuration
+
+If the helper reports that its generated configuration has been modified or corrupted, choose **Force removal recovery** in the Remove menu, review the warning and confirm. Then run Setup again.
+
+For scripted recovery:
+
+```bash
+npx @1endpoint/coding-helper remove --tool dsh --force --yes
+```
+
+Force removal deletes only the fixed helper connection files, including modified contents, without backing up those modified contents. It still preserves original tool settings and runtime conversations. Use it only for recovery, not routine reconfiguration.
+
+## Configuration and privacy
+
+- The shared API base URL is `https://1endpoint.dev/api/v1`.
+- Connection configuration is stored under `~/.1endpoint/coding-helper`. Set an absolute `ONEENDPOINT_HELPER_HOME` if you need a different location.
+- Setup does not overwrite your existing DSH or Claude Code configuration.
+- The interactive menu fetches the public text-model catalog without sending your API key. Explicit setup, reconfigure and doctor commands work locally.
+- Your key is supplied to the launched tool through its process environment, not saved in the helper's connection files.
+- Runtime tools can create their own session data. Keep their isolated homes private.
+- Configuration isolation is **not an operating-system sandbox**; the tools retain their ordinary filesystem and network access.
+
+This is an independent integration, not an official DeepSeek or Anthropic product.
+
+## Troubleshooting
+
+| Problem | What to do |
+| --- | --- |
+| Node version error | Install Node.js 22.19 or newer, then reopen your terminal. |
+| CLI not found | Install the selected coding tool and make sure its executable is on your `PATH`. |
+| API key missing | Set `ONEENDPOINT_API_KEY` in the same terminal, then run Doctor again. |
+| Catalog unavailable | Choose Retry, or explicitly choose manual entry with a known public model ID. |
+| New model is not taking effect | Close the old session and start a new one with the helper's Run action. |
+| Ordinary tool launch ignores the helper | Launch through `npx @1endpoint/coding-helper run --tool dsh` or `--tool claude`. |
+| Generated configuration is damaged | Use Remove → Force removal recovery, then Setup again. |
+| Authentication or model request fails | Confirm your key, model access and account balance in 1endpoint. Doctor does not validate server-side access. |
+
+## More help
+
+- [Console usage guide](https://console.1endpoint.dev/docs/guides/coding-tools/coding-helper)
+- [Report a problem](https://github.com/dothinh115/1endpoint-coding-helper/issues)
+- Maintainers: [publishing](docs/PUBLISHING.md) and [release verification](docs/RELEASE.md).
