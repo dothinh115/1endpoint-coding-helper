@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
-import { select, colorize, wizard } from '../src/ui.mjs'
+import { select, colorize, wizard, readApiKey } from '../src/ui.mjs'
 
 function tty({ raw = false } = {}) {
   const input = new PassThrough()
@@ -101,7 +101,7 @@ async function keys(input, ...steps) {
 test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
   await keys(input, '\r', '\u001b[B\u001b[B\u001b[B\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['doctor', '--tool', 'claude']])
@@ -111,8 +111,8 @@ test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async ()
 test('wizard setup free text is only model, Cancel is default confirmation', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\r', '\r', '\r', '\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  await keys(input, '\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\r')
   await pending
   assert.deepEqual(calls, [])
   assert.match(text(), /Select public model for DSH/)
@@ -122,8 +122,8 @@ test('wizard setup free text is only model, Cancel is default confirmation', asy
 test('wizard reconfigure confirms independent tiers and discloses Claude safety', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\r', '\u001b[B\r', '\r', '\r', '\u001b[B\r', '\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  await keys(input, '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[B\u001b[B\r', '\r', '\r', '\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['reconfigure', '--tool', 'claude', '--haiku-model', 'public-model', '--sonnet-model', 'second-model', '--opus-model', 'public-model', '--model', 'second-model']])
   assert.match(text(), /project\/local settings, hooks and permissions are excluded/)
@@ -135,7 +135,7 @@ test('wizard reconfigure confirms independent tiers and discloses Claude safety'
 test('wizard DSH run offers optional profiles', async () => {
   const { input, output } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
   await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\u001b[B\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['run', '--tool', 'dsh', '--profile', 'headless']])
@@ -144,7 +144,7 @@ test('wizard DSH run offers optional profiles', async () => {
 test('wizard removal defaults to cancel and never dispatches', async () => {
   const { input, output } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
   await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\r')
   await pending
   assert.deepEqual(calls, [])
@@ -153,8 +153,8 @@ test('wizard removal defaults to cancel and never dispatches', async () => {
 test('wizard force recovery warns and requires explicit confirmation', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[A\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[A\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['remove', '--tool', 'dsh', '--yes', '--force']])
   assert.match(text(), /WARNING:.*without backup/)
@@ -164,7 +164,7 @@ test('wizard Escape safely cancels and Exit does not dispatch', async () => {
   for (const key of ['\u0003', '\u001b[A\r']) {
     const { input, output } = tty()
     const calls = []
-    const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+    const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
     if (key === '\u0003') input.write(key)
     else await keys(input, '\r', key)
     await pending
@@ -188,10 +188,10 @@ test('large catalogs use a bounded scrolling viewport', async () => {
 test('language is first and Vietnamese setup confirmation/restart stay localized', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: (argv, context) => calls.push({ argv, context }), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }] })
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: (argv, context) => calls.push({ argv, context }), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }] })
   assert.match(text(), /Language \/ Ngôn ngữ/)
   assert.doesNotMatch(text(), /Setup|Cấu hình/)
-  await keys(input, '\u001b[B\r', '\r', '\r', '\r', '\u001b[B\r')
+  await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'public-model'], context: { language: 'vi' } }])
   assert.match(text(), /Tạo cấu hình riêng/)
@@ -203,8 +203,8 @@ test('language is first and Vietnamese setup confirmation/restart stay localized
 test('catalog failure has explicit manual recovery; free text only model ID', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ dispatch: argv => calls.push(argv), input, output, loadModels: async () => { throw new Error('private detail') } })
-  await keys(input, '\r', '\r', '\r', '\u001b[A\r', 'manual-model\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => { throw new Error('private detail') } })
+  await keys(input, '\r', '\r', '\r', '\u001b[B\u001b[B\r', '\u001b[A\r', 'manual-model\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['setup', '--tool', 'dsh', '--model', 'manual-model']])
   assert.match(text(), /Public model ID/)
@@ -215,5 +215,134 @@ test('non-TTY selection rejects before attaching listeners', async () => {
   const { input, output } = tty()
   input.isTTY = false
   await assert.rejects(select({ message: 'Choose', choices, input, output }), /Non-interactive setup needs/)
+  cleanListeners(input, output)
+})
+
+
+test('masked input supports token paste and backspace without raw secret output', async () => {
+  const { input, output, text } = tty()
+  input.pause()
+  const pending = readApiKey({ input, output })
+  input.write('\u001b[200~sensitive-token\u001b[201~')
+  input.write('\x7fX\r')
+  assert.equal(await pending, 'sensitive-tokeX')
+  assert.doesNotMatch(text(), /sensitive|token/)
+  assert.match(text(), /\*+/)
+  assert.equal(input.isRaw, false)
+  assert.equal(input.isPaused(), true)
+  cleanListeners(input, output)
+})
+
+for (const paste of ['first\nsecond', 'token\r', 'token\t', 'token\u0003', 'token\u001b[B']) {
+  test(`bracketed multiline/control paste is rejected without secret output ${JSON.stringify(paste)}`, async () => {
+    const { input, output, text } = tty()
+    const pending = readApiKey({ input, output })
+    input.write('\u001b[200~' + paste + '\u001b[201~')
+    await assert.rejects(pending, { code: 'UI_INVALID_KEY' })
+    assert.doesNotMatch(text(), /first|second|token/)
+    assert.equal(input.isRaw, false)
+    cleanListeners(input, output)
+  })
+}
+
+test('split bracketed paste never treats its newline as confirmation', async () => {
+  const { input, output } = tty()
+  const pending = readApiKey({ input, output })
+  input.write('\u001b[20'); input.write('0~secret\n'); input.write('bad\u001b[20'); input.write('1~')
+  await assert.rejects(pending, { code: 'UI_INVALID_KEY' })
+  cleanListeners(input, output)
+})
+
+for (const failure of ['escape', 'interrupt', 'error', 'end', 'output']) test(`masked ${failure} restores original raw mode and sanitizes error`, async () => {
+  const { input, output, text } = tty({ raw: true })
+  const pending = readApiKey({ input, output })
+  input.write('super-secret')
+  if (failure === 'escape') input.write('\u001b')
+  else if (failure === 'interrupt') input.write('\u0003')
+  else if (failure === 'error') input.emit('error', new Error('private details'))
+  else if (failure === 'output') output.emit('error', new Error('private details'))
+  else input.emit('end')
+  await assert.rejects(pending, error => ['UI_CANCELLED', 'UI_TERMINAL_ERROR'].includes(error.code) && !/private/.test(error.message))
+  assert.equal(input.isRaw, true)
+  assert.doesNotMatch(text(), /super-secret/)
+  cleanListeners(input, output)
+})
+
+test('setup default paste saves only through dispatch context after explicit confirmation', async () => {
+  const { input, output, text } = tty()
+  const calls = []
+  const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'model' }] })
+  await keys(input, '\r', '\r', '\r', '\r', '\u001b[200~sk-private-test\u001b[201~', '\r', '\r', '\r', '\u001b[B\r')
+  await pending
+  assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'model'], context: { language: 'en', apiKey: 'sk-private-test', saveKey: true } }])
+  assert.doesNotMatch(text(), /sk-private-test/)
+  assert.match(text(), /plaintext, mode 0600/)
+  assert.match(text(), /not encrypted/)
+})
+
+test('cancel after paste leaves dispatcher and saved key untouched', async () => {
+  const { input, output, text } = tty()
+  let dispatched = false, loaded = false
+  const pending = wizard({ input, output, dispatch: () => { dispatched = true }, loadModels: async () => { loaded = true; return [{ id: 'm' }] } })
+  await keys(input, '\r', '\r', '\r', '\r', 'secret-cancel\r', '\u001b[A\r')
+  await pending
+  assert.equal(dispatched, false)
+  assert.equal(loaded, false)
+  assert.doesNotMatch(text(), /secret-cancel|Use existing saved/)
+})
+
+test('explicit Vietnamese browser failure stays in key menu and can retry, never auto opens', async () => {
+  const { input, output, text } = tty()
+  const opened = [], calls = []
+  const pending = wizard({ input, output, openConsole: async options => { opened.push(options); if (opened.length === 1) throw new Error('private browser detail') }, dispatch: argv => calls.push(argv), loadModels: async () => [{ id: 'm' }] })
+  assert.deepEqual(opened, [])
+  await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[A\r')
+  await pending
+  assert.deepEqual(opened, [{ language: 'vi' }, { language: 'vi' }])
+  assert.deepEqual(calls, [])
+  assert.match(text(), /Không mở được Console/)
+  assert.doesNotMatch(text(), /private browser detail/)
+})
+
+test('run without available key asks for key and forwards run-only context', async () => {
+  const { input, output } = tty()
+  const calls = []
+  const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }) })
+  await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\r', 'run-secret\r', '\u001b[B\r', '\r')
+  await pending
+  assert.deepEqual(calls, [{ argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'run-secret', saveKey: false } }])
+})
+
+test('session-only setup offers explicit billed launch and passes key without argv', async () => {
+  const { input, output, text } = tty()
+  const calls = []
+  const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'm' }] })
+  await keys(input, '\r', '\r', '\r', '\r', 'session-secret\r', '\u001b[B\r', '\r', '\u001b[B\r', '\u001b[B\r')
+  await pending
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[1], { argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'session-secret', saveKey: false } })
+  assert.match(text(), /may incur charges/)
+  assert.doesNotMatch(text(), /session-secret/)
+})
+
+test('removal explicitly chooses whether to remove the saved tool key', async () => {
+  const { input, output } = tty()
+  const calls = []
+  const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }) })
+  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[B\r')
+  await pending
+  assert.deepEqual(calls, [{ argv: ['remove', '--tool', 'dsh', '--yes'], context: { language: 'en', removeKey: true } }])
+})
+
+for (const columns of [80, 120]) test(`menu wraps full Vietnamese/model labels at ${columns} columns without truncation`, async () => {
+  const { input, output, text } = tty()
+  output.columns = columns
+  const label = 'Mô hình tiếng Việt e\u0301 😀 ' + 'public-model-long-id-'.repeat(8)
+  const pending = select({ message: 'Chọn mô hình', choices: [{ label, value: 1 }], input, output, language: 'vi' })
+  input.write('\r')
+  assert.equal(await pending, 1)
+  const rendered = text().replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/\n/g, '')
+  assert.ok(rendered.includes(label))
+  assert.doesNotMatch(text(), /…/)
   cleanListeners(input, output)
 })

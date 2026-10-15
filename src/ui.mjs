@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises'
 import { fetchModels } from './catalog.mjs'
+import { openConsole } from './browser.mjs'
 import * as claudeAdapter from './adapters/claude.mjs'
 
 const palette = { heading: 36, info: 34, success: 32, warning: 33, error: 31, muted: 90, selected: 35 }
@@ -31,12 +32,19 @@ export async function select({ message, choices, input = process.stdin, output =
   const wasPaused = typeof input.isPaused === 'function' && input.isPaused()
   let index = 0, rendered = false, buffer = '', timer, settled = false
   const pageSize = Math.min(choices.length, 8, Math.max(1, (output.rows || 24) - 4))
-  const lines = pageSize + 2
-  // Conservative cell budget also prevents wrapping wide Unicode labels.
-  const fit = text => {
-    const chars = Array.from(clean(text))
-    const limit = Math.max(8, Math.floor((output.columns || 120) / 2) - 1)
-    return chars.length > limit ? chars.slice(0, limit - 1).join('') + '…' : chars.join('')
+  let renderedLines = 0
+  const wrap = text => {
+    const width = Math.max(4, (output.columns || 120) - 1)
+    const lines = ['']
+    let cells = 0
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(clean(text))) {
+      const cp = segment.codePointAt(0)
+      const size = /^\p{Mark}+$/u.test(segment) ? 0 : /\p{Extended_Pictographic}/u.test(segment) || cp >= 0x1100 && (cp <= 0x115f || cp >= 0x2e80 && cp <= 0xa4cf || cp >= 0xac00 && cp <= 0xd7a3 || cp >= 0xf900 && cp <= 0xfaff || cp >= 0xfe10 && cp <= 0xfe6f || cp >= 0xff01 && cp <= 0xff60 || cp >= 0x20000) ? 2 : 1
+      if (cells + size > width) { lines.push(''); cells = 0 }
+      lines[lines.length - 1] += segment
+      cells += size
+    }
+    return lines
   }
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -59,16 +67,24 @@ export async function select({ message, choices, input = process.stdin, output =
     }
     function onFailure() { finish(uiError()) }
     function draw() {
-      if (rendered) output.write(`\u001b[${lines}A\r`)
-      output.write('\u001b[2K' + colorize(fit(message), 'heading', { output }) + '\n')
+      if (rendered) output.write(`\u001b[${renderedLines}A\r\u001b[J`)
+      const rows = wrap(message).map(text => ({ text, kind: 'heading' }))
       const start = Math.min(Math.max(0, index - pageSize + 1), choices.length - pageSize)
-      choices.slice(start, start + pageSize).forEach((choice, offset) => {
-        const i = start + offset
-        const text = `${i === index ? '❯' : ' '} ${choice.label}${choice.description ? ` — ${choice.description}` : ''}`
-        output.write('\u001b[2K' + colorize(fit(text), i === index ? 'selected' : 'info', { output }) + '\n')
-      })
       const hint = language === 'vi' ? '↑/↓ chọn · Enter xác nhận · Esc hủy' : '↑/↓ select · Enter accept · Esc cancel'
-      output.write('\u001b[2K' + colorize(fit(`${index + 1}/${choices.length} · ${hint}`), 'muted', { output }) + '\n')
+      const footer = wrap(`${index + 1}/${choices.length} · ${hint}`)
+      let candidates = choices.slice(start, start + pageSize).map((choice, offset) => ({
+        i: start + offset,
+        lines: wrap(`${start + offset === index ? '❯' : ' '} ${choice.label}${choice.description ? ` — ${choice.description}` : ''}`)
+      }))
+      const budget = Math.max(1, (output.rows || 24) - rows.length - footer.length - 1)
+      while (candidates.length > 1 && candidates.reduce((n, c) => n + c.lines.length, 0) > budget) {
+        if (candidates[0].i < index) candidates.shift()
+        else candidates.pop()
+      }
+      for (const candidate of candidates) for (const text of candidate.lines) rows.push({ text, kind: candidate.i === index ? 'selected' : 'info' })
+      for (const text of footer) rows.push({ text, kind: 'muted' })
+      for (const { text, kind } of rows) output.write('\u001b[2K' + colorize(text, kind, { output }) + '\n')
+      renderedLines = rows.length
       rendered = true
     }
     function onData(chunk) {
@@ -114,6 +130,81 @@ export async function select({ message, choices, input = process.stdin, output =
   })
 }
 
+/** Masked single-token entry. Bracketed paste is buffered until its end marker. */
+export async function readApiKey({ input = process.stdin, output = process.stdout, language = 'en' } = {}) {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') throw uiError()
+  const wasRaw = Boolean(input.isRaw), wasPaused = input.isPaused?.()
+  let value = '', buffer = '', pasting = false, pasted = '', settled = false, timer
+  return new Promise((resolve, reject) => {
+    const finish = (error, result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      for (const event of ['data', 'error', 'end', 'close']) input.off(event, event === 'data' ? onData : onFailure)
+      output.off('error', onFailure)
+      try { input.setRawMode(wasRaw) } catch {}
+      try { if (wasPaused) input.pause() } catch {}
+      try { output.write('\u001b[?2004l\n') } catch {}
+      value = ''; pasted = ''; buffer = ''
+      if (error) reject(error)
+      else resolve(result)
+    }
+    const invalid = () => {
+      const error = new Error(language === 'vi' ? 'Khóa API phải là một chuỗi duy nhất, không có khoảng trắng hoặc ký tự điều khiển.' : 'API key must be a single token without whitespace or control characters.')
+      error.code = 'UI_INVALID_KEY'
+      finish(error)
+    }
+    const valid = text => /^[\x21-\x7e]+$/.test(text) && text.length <= 8192
+    function onFailure() { finish(uiError()) }
+    function onData(chunk) {
+      try {
+        clearTimeout(timer)
+        buffer += chunk.toString('utf8')
+        while (buffer && !settled) {
+          if (pasting) {
+            const end = buffer.indexOf('\u001b[201~')
+            if (end < 0) {
+              // Retain a possible split terminator; no pasted byte is interpreted as a key.
+              if (buffer.length > 6) { pasted += buffer.slice(0, -6); buffer = buffer.slice(-6) }
+              if (pasted.length > 8192) return invalid()
+              return
+            }
+            pasted += buffer.slice(0, end)
+            buffer = buffer.slice(end + 6)
+            if (!valid(pasted) || value.length + pasted.length > 8192) return invalid()
+            value += pasted; output.write('*'.repeat(pasted.length)); pasted = ''; pasting = false
+            continue
+          }
+          if (buffer.startsWith('\u001b[200~')) { buffer = buffer.slice(6); pasting = true; continue }
+          if ('\u001b[200~'.startsWith(buffer) && buffer[0] === '\u001b') {
+            timer = setTimeout(() => finish(uiError(true)), 35); return
+          }
+          const char = buffer[0]; buffer = buffer.slice(1)
+          if (char === '\u0003' || char === '\u001b') return finish(uiError(true))
+          if (char === '\r' || char === '\n') {
+            if (!valid(value) || buffer.length) return invalid()
+            return finish(null, value)
+          }
+          if (char === '\x7f' || char === '\b') {
+            if (value) { value = value.slice(0, -1); output.write('\b \b') }
+            continue
+          }
+          if (!valid(char) || value.length >= 8192) return invalid()
+          value += char; output.write('*')
+        }
+      } catch { finish(uiError()) }
+    }
+    try {
+      input.on('data', onData)
+      for (const event of ['error', 'end', 'close']) input.on(event, onFailure)
+      output.on('error', onFailure)
+      input.setRawMode(true)
+      output.write('\u001b[?2004h' + (language === 'vi' ? 'Dán khóa API (ẩn): ' : 'Paste API key (masked): '))
+      input.resume()
+    } catch { finish(uiError()) }
+  })
+}
+
 async function modelQuestion(input, output, language = 'en') {
   const controller = new AbortController()
   const terminal = createInterface({ input, output, terminal: true })
@@ -139,7 +230,7 @@ async function modelQuestion(input, output, language = 'en') {
 }
 
 /** Gather CLI arguments only. State and tool execution belong to dispatch. */
-export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels }) {
+export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), openConsole: openBrowser = openConsole }) {
   if (typeof dispatch !== 'function') throw new Error('Wizard requires a CLI dispatcher.')
   let language = 'en'
   const t = (en, vi) => language === 'vi' ? vi : en
@@ -152,7 +243,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
     language = await choose('Language / Ngôn ngữ', [
       { label: 'English', value: 'en' }, { label: 'Tiếng Việt', value: 'vi' }
     ])
-    const action = await choose(t('1endpoint coding-helper · isolated configuration; no API key is requested or saved', '1endpoint coding-helper · cấu hình riêng; không yêu cầu hoặc lưu khóa API'), [
+    const action = await choose(t('1endpoint coding-helper · isolated configuration', '1endpoint coding-helper · cấu hình riêng'), [
       { label: t('Setup', 'Cấu hình'), value: 'setup' },
       { label: t('Reconfigure', 'Cấu hình lại'), value: 'reconfigure' },
       { label: t('Remove', 'Xóa cấu hình'), value: 'remove' },
@@ -165,6 +256,44 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       { label: 'DSH', value: 'dsh' }, { label: 'Claude Code', value: 'claude' }
     ])
     const argv = [action, '--tool', tool]
+    const context = { language }
+    if (['setup', 'reconfigure', 'run'].includes(action)) {
+      let available = false
+      try { available = (await getKeyStatus({ tool }))?.available === true } catch {}
+      if (action !== 'run' || !available) {
+        while (true) {
+          const keyAction = await choose(t('API key', 'Khóa API'), [
+            { label: t('Paste key (masked)', 'Dán khóa (ẩn)'), value: 'paste' },
+            { label: t('Open Console create API key', 'Mở Console tạo khóa API'), value: 'open', description: t('Enter opens the API keys page', 'Enter mở trang khóa API') },
+            ...(available ? [{ label: t('Use existing saved/environment key', 'Dùng khóa đã lưu hoặc biến môi trường'), value: 'existing' }] : []),
+            { label: t('Skip; use environment key later', 'Bỏ qua; dùng khóa môi trường sau'), value: 'skip' },
+            { label: t('Cancel', 'Hủy'), value: 'cancel' }
+          ])
+          if (keyAction === 'cancel') return
+          if (keyAction === 'existing' || keyAction === 'skip') break
+          if (keyAction === 'open') {
+            try { await openBrowser({ language }) }
+            catch { output.write(t('Could not open Console. Select Open Console to retry, or paste a key.\n', 'Không mở được Console. Chọn Mở Console để thử lại hoặc dán khóa.\n')) }
+            continue
+          }
+          let key
+          try { key = await readApiKey({ input, output, language }) }
+          catch (error) {
+            if (error.code !== 'UI_INVALID_KEY') throw error
+            output.write(error.message + '\n'); continue
+          }
+          output.write(t('Local keys are plaintext, mode 0600: accessible to your user account, not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần, quyền 0600: tài khoản của bạn có thể đọc, không được mã hóa.\n'))
+          const storage = await choose(t('Key storage', 'Lưu khóa'), [
+            { label: t('Save locally', 'Lưu cục bộ'), value: 'save' },
+            { label: t('This run only', 'Chỉ lần chạy này'), value: 'session' },
+            { label: t('Cancel', 'Hủy'), value: 'cancel' }
+          ])
+          if (storage === 'cancel') return
+          context.apiKey = key; context.saveKey = storage === 'save'
+          break
+        }
+      }
+    }
     if (action === 'setup' || action === 'reconfigure') {
       let models, manual = false
       while (!models && !manual) {
@@ -192,7 +321,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
         const optionalRoles = claudeAdapter.CLAUDE_OPTIONAL_ROLES || []
         let activeRoles = [...roles]
         if (optionalRoles.length) {
-          const extra = await choose(t('Claude tier support depends on your installed version; no version is guessed.', 'Các cấp Claude tùy thuộc phiên bản đã cài; không tự suy đoán phiên bản.'), [
+          const extra = await choose(t('Select the tiers supported by your Claude Code version.', 'Chọn các cấp được phiên bản Claude Code của bạn hỗ trợ.'), [
             { label: t('Standard Haiku / Sonnet / Opus', 'Các cấp chuẩn Haiku / Sonnet / Opus'), value: false },
             { label: t('Include optional tiers', 'Thêm cấp tùy chọn'), value: true, description: t('Only if your installed Claude supports ', 'Chỉ chọn nếu Claude đã cài hỗ trợ ') + optionalRoles.map(role => role.label).join(', ') }
           ])
@@ -224,15 +353,27 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       ])
       if (mode === 'cancel') return
       if (mode === 'force') output.write(colorize(t('WARNING: Force recovery deletes fixed helper configuration paths, including modified contents, without backup.\n', 'CẢNH BÁO: xóa cưỡng chế xóa các đường dẫn cấu hình riêng cố định, kể cả nội dung đã sửa, không sao lưu.\n'), 'warning', { output }))
+      context.removeKey = await choose(t('Saved key for this tool', 'Khóa đã lưu cho công cụ này'), [
+        { label: t('Keep saved key', 'Giữ khóa đã lưu'), value: false },
+        { label: t('Remove saved key too', 'Xóa cả khóa đã lưu'), value: true }
+      ])
       if (!await confirm(mode === 'force' ? t('Confirm forced recovery deletion without backup?', 'Xác nhận xóa cưỡng chế không sao lưu?') : t('Confirm removal of helper-owned configuration?', 'Xác nhận xóa cấu hình riêng?'))) return
       argv.push('--yes')
       if (mode === 'force') argv.push('--force')
     }
-    const result = await dispatch(argv, { language })
+    const result = await dispatch(argv, context)
     if (action === 'setup' || action === 'reconfigure') {
       const warning = t(`Restart your ${tool === 'dsh' ? 'DSH' : 'Claude Code'} session to apply. Existing sessions do not update automatically. Start a new session through coding-helper.\n`, `Khởi động lại phiên ${tool === 'dsh' ? 'DSH' : 'Claude Code'} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới thông qua coding-helper.\n`)
       const colored = colorize(warning, 'warning', { output })
       output.write(colored === warning ? warning : `\u001b[1m${colored}\u001b[0m`)
+    }
+    if ((action === 'setup' || action === 'reconfigure') && context.apiKey && !context.saveKey) {
+      output.write(t('This key is only available now. Paste it again when reopening coding-helper.\n', 'Khóa chỉ có trong lần chạy này. Dán lại khi mở coding-helper lần sau.\n'))
+      const launch = await choose(t('Start a new session?', 'Mở phiên mới?'), [
+        { label: t('Finish', 'Hoàn tất'), value: false },
+        { label: t('Start new session now (may incur charges)', 'Mở phiên mới ngay (có thể phát sinh phí)'), value: true }
+      ])
+      if (launch) return dispatch(['run', '--tool', tool], { language, apiKey: context.apiKey, saveKey: false })
     }
     return result
   } catch (error) {

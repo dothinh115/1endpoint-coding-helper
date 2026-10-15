@@ -19,8 +19,10 @@ npx @1endpoint/coding-helper
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
 3. Select **DSH** or **Claude Code**.
-4. Select models from the 1endpoint catalog.
-5. Review the selection, then choose **Confirm**.
+4. Paste your API key into the masked prompt, or select **Open Console** and press Enter to create a key first.
+5. Choose whether to save the key locally or use it for this session only.
+6. Select models from the 1endpoint catalog.
+7. Review the selection, then choose **Confirm**.
 
 Use **↑ / ↓** to move and **Enter** to select. Press **Escape** to cancel. Confirmation is a selection, not a typed `y/n` answer.
 
@@ -34,9 +36,21 @@ If the catalog cannot be loaded, choose **Retry**, explicitly choose **Manual mo
 
 ## 2. Provide your API key
 
-The helper does **not** save your API key. Set `ONEENDPOINT_API_KEY` in the terminal where you will launch the tool, using your secret manager or a hidden prompt.
+Paste your key directly into the helper's **masked API-key prompt**. The key is not shown on screen or placed in command arguments.
 
-For **Bash**, the following prompt keeps the key out of the command itself and hides it while you type:
+Need a key? Select **Open Console** and press **Enter**. The helper opens [API keys](https://console.1endpoint.dev/api-keys), or the [Vietnamese API-key page](https://console.1endpoint.dev/vi/api-keys) when Vietnamese is selected. Create a key, copy it, return to the terminal and paste it into the prompt.
+
+Choose how to use the key:
+
+- **Save locally:** remember it for the selected tool, so future launches do not require manual environment export. The saved file is plaintext, **not encrypted**, protected with private file permissions (0600 file, 0700 directory on POSIX systems). Other processes running as your user may still access it.
+- **This session only:** keep it in memory for this helper process. After setup, select **Start a new session now** to launch with it. Reopening the helper later requires entering the key again.
+- **Use an existing key:** reuse an available environment or saved key without displaying its value.
+
+DSH and Claude Code store their keys separately. An explicit session key takes priority, followed by `ONEENDPOINT_API_KEY`, then the selected tool's saved key. The helper never puts keys in generated tool settings, model configuration, backups or logs.
+
+### Optional: use an environment variable
+
+If you prefer a secret manager or shell environment instead of local storage, provide `ONEENDPOINT_API_KEY`. For **Bash**, this hidden prompt keeps the key out of the command itself:
 
 ```bash
 read -r -s -p "1endpoint API key: " ONEENDPOINT_API_KEY
@@ -60,7 +74,7 @@ For Claude Code:
 npx @1endpoint/coding-helper doctor --tool claude
 ```
 
-Doctor checks your saved connection configuration, whether the tool is installed, and whether the key environment variable is present. It does not validate the key against the server or make an inference request.
+Doctor checks your saved connection configuration, whether the tool is installed, and whether an environment or saved API key is available. It does not validate the key against the server or make an inference request.
 
 ## 4. Start a new tool session
 
@@ -130,7 +144,13 @@ npx @1endpoint/coding-helper remove --tool dsh --dry-run
 npx @1endpoint/coding-helper remove --tool dsh --yes
 ```
 
-Use `--tool claude` for Claude Code. Removal deletes only the helper-generated connection configuration. **Your original tool settings, runtime conversations and configuration backups are preserved.** To return to your ordinary setup, launch `dsh` or `claude` directly.
+Use `--tool claude` for Claude Code. The menu asks whether to **keep or delete the saved API key**. For scripted removal, add `--remove-key` to delete it explicitly:
+
+```bash
+npx @1endpoint/coding-helper remove --tool dsh --yes --remove-key
+```
+
+Without that choice, the saved key is retained. Removal deletes only the helper-generated connection configuration and, when selected, its saved key. **Your original tool settings, runtime conversations and configuration backups are preserved.** To return to your ordinary setup, launch `dsh` or `claude` directly.
 
 ### Recover from damaged connection configuration
 
@@ -162,7 +182,7 @@ This is an independent integration, not an official DeepSeek or Anthropic produc
 | --- | --- |
 | Node version error | Install Node.js 22.19 or newer, then reopen your terminal. |
 | CLI not found | Install the selected coding tool and make sure its executable is on your `PATH`. |
-| API key missing | Set `ONEENDPOINT_API_KEY` in the same terminal, then run Doctor again. |
+| API key missing | Open the helper and paste a key, or press Enter on Open Console to create one. Choose Save locally for future launches. |
 | Catalog unavailable | Choose Retry, or explicitly choose manual entry with a known public model ID. |
 | New model is not taking effect | Close the old session and start a new one with the helper's Run action. |
 | Ordinary tool launch ignores the helper | Launch through `npx @1endpoint/coding-helper run --tool dsh` or `--tool claude`. |

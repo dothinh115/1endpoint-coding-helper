@@ -7,13 +7,14 @@ import { wizard, colorize } from './ui.mjs'
 import { setup, reconfigure, remove, backup, loadState, stateRoot, validateTool, assertSafePath } from './state.mjs'
 import { launchClaude, childEnvironment } from './adapters/claude.mjs'
 import { launchDsh } from './adapters/dsh.mjs'
+import { getCredential, saveCredential, removeCredential } from './credentials.mjs'
 
 const HELP = `@1endpoint/coding-helper — isolated 1endpoint coding-tool setup
 
 Usage:
   coding-helper setup --tool dsh|claude --model PUBLIC_MODEL [--dry-run] [--update]
   coding-helper reconfigure --tool dsh|claude --model PUBLIC_MODEL [--dry-run]
-  coding-helper remove --tool dsh|claude [--yes] [--dry-run] [--force]
+  coding-helper remove --tool dsh|claude [--yes] [--dry-run] [--force] [--remove-key]
   coding-helper doctor --tool dsh|claude
   coding-helper run --tool dsh|claude [--profile web|headless|acp|sdk] -- [tool args]
   coding-helper backup --tool dsh|claude
@@ -24,7 +25,9 @@ Wizard fetches public 1endpoint text models for independent tool/tier selections
 Claude setup/reconfigure accepts --haiku-model ID --sonnet-model ID --opus-model ID
 and optional --fable-model ID for supporting versions. --model is the main/default fallback.
 Node.js >=22.19 is required.
-API key: export ONEENDPOINT_API_KEY in your shell; never pass it as an argument.
+Paste your API key privately in the menu, or press Enter on Open Console to create one.
+Choose private local storage or session-only use. Saved keys are plaintext private files, not encrypted.
+ONEENDPOINT_API_KEY remains an optional environment override; never pass keys as arguments.
 State: ONEENDPOINT_HELPER_HOME or ~/.1endpoint/coding-helper (isolated tool homes).
 No existing DSH/Claude settings are edited. Setup/doctor make no API requests.
 Claude launch excludes project/local settings, hooks and permissions; managed policy applies.
@@ -38,12 +41,12 @@ function parse(argv) {
   while (args.length) {
     const arg = args.shift()
     if (arg === '--') { forwarded.push(...args); break }
-    if (['--dry-run', '--update', '--yes', '--force'].includes(arg)) { if (options[arg]) throw new Error('Duplicate option.'); options[arg] = true; continue }
+    if (['--dry-run', '--update', '--yes', '--force', '--remove-key'].includes(arg)) { if (options[arg]) throw new Error('Duplicate option.'); options[arg] = true; continue }
     if (!['--tool', '--model', '--profile', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'].includes(arg)) throw new Error('Unknown option. Use --help. API keys must never be command-line arguments.')
     if (options[arg] !== undefined || !args.length || args[0].startsWith('-')) throw new Error('Missing or duplicate option value.')
     options[arg] = args.shift()
   }
-  const allowed = { setup: ['--tool', '--model', '--dry-run', '--update', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], reconfigure: ['--tool', '--model', '--dry-run', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], remove: ['--tool', '--yes', '--dry-run', '--force'], doctor: ['--tool'], backup: ['--tool'], run: ['--tool', '--profile'] }
+  const allowed = { setup: ['--tool', '--model', '--dry-run', '--update', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], reconfigure: ['--tool', '--model', '--dry-run', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], remove: ['--tool', '--yes', '--dry-run', '--force', '--remove-key'], doctor: ['--tool'], backup: ['--tool'], run: ['--tool', '--profile'] }
   if (!allowed[command] || Object.keys(options).some(key => !allowed[command].includes(key)) || (command !== 'run' && forwarded.length)) throw new Error('Invalid command/options. Use --help.')
   validateTool(options['--tool'])
   if (options['--tool'] !== 'claude' && ['haiku', 'sonnet', 'opus', 'fable'].some(role => options[`--${role}-model`])) throw new Error('Tier model flags are only supported for Claude.')
@@ -63,7 +66,10 @@ async function executable(command, env) {
   return null
 }
 async function main(argv, context = {}) {
-  if (!argv.length) return wizard({ dispatch: main })
+  if (!argv.length) return wizard({ dispatch: main, getKeyStatus: async ({ tool }) => {
+    const credential = await getCredential({ stateDir: stateRoot(), tool })
+    return { available: Boolean(credential.key), source: credential.source }
+  } })
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) { console.log(HELP); return }
   if (argv.length === 1 && ['--version', '-v'].includes(argv[0])) {
     const metadata = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'))
@@ -76,8 +82,12 @@ async function main(argv, context = {}) {
     const result = await remove({ stateDir, tool, dryRun: options['--dry-run'], yes: options['--yes'], force: options['--force'] })
     console.log(`${result.dryRun ? t('Preview removal', 'Xem trước việc xóa') : result.changed ? t('Removed helper configuration', 'Đã xóa cấu hình riêng') : t('Already removed', 'Cấu hình đã được xóa')}: ${tool}`)
     for (const file of result.files) console.log(`  ${file}`)
+    if (options['--remove-key'] || context.removeKey) {
+      await removeCredential({ stateDir, tool, dryRun: Boolean(options['--dry-run']) })
+      console.log(options['--dry-run'] ? t('Saved-key removal preview only.', 'Chỉ xem trước việc xóa khóa đã lưu.') : t('Saved API key removed (if present).', 'Đã xóa khóa API đã lưu (nếu có).'))
+    }
     if (result.force) console.log(t('Forced recovery removes only fixed helper configuration paths; modified contents are not backed up.', 'Khôi phục cưỡng chế chỉ xóa đường dẫn cấu hình riêng cố định; nội dung đã sửa không được sao lưu.'))
-    console.log(t('Existing user settings, runtime homes, backups and unknown files were preserved.', 'Đã giữ nguyên cài đặt gốc, dữ liệu phiên chạy, bản sao lưu và các tệp khác.'))
+    console.log(t('Original tool settings, conversations and backups are unchanged.', 'Cài đặt gốc, hội thoại và bản sao lưu được giữ nguyên.'))
     return
   }
   if (command === 'setup' || command === 'reconfigure') {
@@ -87,25 +97,31 @@ async function main(argv, context = {}) {
     for (const file of result.files) console.log(`  ${file.path}`)
     if (context.language !== 'vi') for (const hint of result.hints || []) console.log(hint)
     else console.log(tool === 'claude' ? 'Không nạp cài đặt, hook và quyền project/local. Chính sách quản trị vẫn áp dụng; không bỏ qua quyền.' : 'DSH dùng home và cấu hình riêng; không sửa cài đặt gốc. Chế độ sdk-minimal không được hỗ trợ.')
-    console.log(t('Set ONEENDPOINT_API_KEY in your shell, then use run --tool ', 'Đặt ONEENDPOINT_API_KEY trong môi trường shell, sau đó dùng run --tool ') + tool + t('. No key was saved.', '. Không lưu khóa API.'))
+    if (!result.dryRun && context.apiKey && context.saveKey) {
+      await saveCredential({ stateDir, tool, key: context.apiKey })
+      console.log(t('API key saved privately for this tool. Local storage is not encrypted.', 'Đã lưu khóa API riêng cho công cụ này. Tệp lưu cục bộ không được mã hóa.'))
+    } else if (context.apiKey) console.log(t('API key is available for this session only.', 'Khóa API chỉ dùng trong phiên này.'))
+    else console.log(t('Use the interactive menu to paste an API key, or provide ONEENDPOINT_API_KEY in your environment.', 'Mở menu để dán khóa API, hoặc cung cấp ONEENDPOINT_API_KEY qua môi trường.'))
     if (!result.dryRun && !context.language) console.log(colorize('RESTART REQUIRED: existing sessions are not updated. Start a new session through coding-helper run --tool ' + tool + '.', 'warning'))
     return
   }
   if (command === 'backup') { console.log('Secret-free configuration backup: ' + await backup({ stateDir, tool })); return }
   const { state, plan } = await loadState(stateDir, tool)
+  const credential = context.apiKey ? { key: context.apiKey, source: 'session' } : await getCredential({ stateDir, tool })
   const bin = await executable(plan.command, process.env)
   if (command === 'doctor') {
     console.log(`${t('Configuration integrity: OK', 'Tính toàn vẹn cấu hình: OK')} (${tool})`)
     console.log(`${t('CLI installed', 'Đã cài CLI')}: ${bin ? t('yes', 'có') : t('no', 'chưa')}`)
-    console.log(`ONEENDPOINT_API_KEY: ${process.env.ONEENDPOINT_API_KEY ? t('present (not validated)', 'đã có (chưa xác thực)') : t('missing', 'chưa có')}`)
+    console.log(`${t('API key', 'Khóa API')}: ${credential.key ? t('available (not validated)', 'đã có (chưa xác thực)') : t('missing', 'chưa có')}`)
     console.log(t('No credentials read from tool files. No network or inference check performed.', 'Không đọc thông tin đăng nhập từ tệp công cụ. Không kiểm tra mạng hoặc gọi mô hình.'))
     if (context.language !== 'vi') for (const hint of plan.hints || []) console.log(hint)
-    if (!bin || !process.env.ONEENDPOINT_API_KEY) process.exitCode = 1
+    if (!bin || !credential.key) process.exitCode = 1
     return
   }
   if (!bin) throw new Error('CLI not found on PATH. Install the tool from its official distribution first.')
-  const key = process.env.ONEENDPOINT_API_KEY
-  if (!key || /[\r\n\0]/.test(key)) throw new Error('Set a valid ONEENDPOINT_API_KEY in the environment. It is never saved.')
+  const key = credential.key
+  if (!key || /[\s\x00-\x1f\x7f-\x9f]/.test(key)) throw new Error(t('Add an API key through the interactive menu or set ONEENDPOINT_API_KEY.', 'Thêm khóa API qua menu hoặc đặt ONEENDPOINT_API_KEY.'))
+  if (context.apiKey && context.saveKey) await saveCredential({ stateDir, tool, key })
   let launch
   try { launch = (tool === 'dsh' ? launchDsh : launchClaude)({ stateDir, model: state.model, roleModels: state.roles, args: forwarded, profile: options['--profile'] || 'web' }) }
   catch { throw new Error('Unsupported tool arguments: routing, agent/plugin and permission-bypass overrides are not allowed.') }
