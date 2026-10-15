@@ -110,7 +110,7 @@ yarn test
 yarn pack --out ../coding-helper-0.1.0.tgz
 ```
 
-No production dependencies and no build step. The published entry is native ESM. Package contents are allowlisted. See [release checklist](docs/RELEASE.md) for current verification boundaries and publishing steps. Publishing is a separate maintainer action; creating or pushing the repository does not publish npm.
+No production dependencies and no build step. The published entry is native ESM. Package contents are allowlisted. See the [publishing guide](docs/PUBLISHING.md) for step-by-step npm authentication, first publication, verification, updates and troubleshooting. See the [release checklist](docs/RELEASE.md) for current verification boundaries. Publishing is a separate maintainer action; creating or pushing the repository does not publish npm.
 
 ## Reference and attribution
 
