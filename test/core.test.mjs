@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import http from 'node:http'
+import YAML from 'yaml'
 import { setup, reconfigure, remove, backup, loadState, stateRoot, planFor, validateModel, assertSafePath } from '../src/state.mjs'
 import { createClaudePlan, launchClaude, childEnvironment, MODEL_VARIABLES } from '../src/adapters/claude.mjs'
 import { parse } from '../src/cli.mjs'
@@ -51,7 +52,7 @@ function run(command, args, options = {}) {
 async function cliEnv(root) {
   const home = path.join(root, 'actual-home')
   await fs.mkdir(home, { recursive: true })
-  return { PATH: path.dirname(process.execPath), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
+  return { PATH: path.dirname(process.execPath), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), CLAUDE_CONFIG_DIR: path.join(root, 'native-claude'), DSH_HOME: path.join(root, 'native-dsh'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
 }
 
 test('model validation accepts public IDs and refuses injection or ambiguous IDs', () => {
@@ -305,42 +306,135 @@ test('CLI help/version and noninteractive errors do not expose supplied values o
   assert.throws(() => parse(['setup', '--tool', 'claude', '--dry-run', '--dry-run']))
 })
 
+// Fake tools read native configuration themselves, just as direct CLI startup does.
+// Reports contain only booleans/non-secret arguments, never credential bytes.
+const nativeProbe = `const fs = require('node:fs');
+const path = require('node:path');
+const YAML = require(${JSON.stringify(fileURLToPath(new URL('../node_modules/yaml/dist/index.js', import.meta.url)))});
+const tool = path.basename(process.argv[1]);
+let mappingsPresent, keyPresent;
+if (tool === 'claude') {
+  const settings = JSON.parse(fs.readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), 'utf8'));
+  mappingsPresent = settings.model === 'public-model' && settings.env.ANTHROPIC_BASE_URL === 'https://1endpoint.dev/api/v1' && ${JSON.stringify(MODEL_VARIABLES)}.every(name => settings.env[name] === 'public-model');
+  keyPresent = settings.env.ANTHROPIC_AUTH_TOKEN === process.env.EXPECTED_KEY;
+} else {
+  const rows = YAML.parse(fs.readFileSync(path.join(process.env.DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8'));
+  const config = id => rows.find(row => row.id === id).config;
+  const provider = config('llm-pi-ai').providers['1endpoint'];
+  mappingsPresent = provider.baseURL === 'https://1endpoint.dev/api/v1' && provider.models[0].id === 'public-model' && provider.apiKeyEnv === 'ONEENDPOINT_API_KEY' && config('agent-default-model').provider === '1endpoint' && config('agent-default-model').model === 'public-model';
+  keyPresent = fs.readFileSync(path.join(process.env.DSH_HOME, '.env'), 'utf8').includes(JSON.stringify(process.env.EXPECTED_KEY));
+}
+fs.writeFileSync(process.env.REPORT, JSON.stringify({ args: process.argv.slice(2), mappingsPresent, keyPresent,
+  homePreserved: process.env.HOME === process.env.EXPECTED_HOME,
+  nativeHomesPreserved: process.env.CLAUDE_CONFIG_DIR === process.env.EXPECTED_CLAUDE && process.env.DSH_HOME === process.env.EXPECTED_DSH,
+  noInjectedAuth: !process.env.ANTHROPIC_AUTH_TOKEN,
+  conflictPreserved: process.env.ANTHROPIC_API_KEY === 'poison' && process.env.ANTHROPIC_BASE_URL === 'https://evil.invalid',
+  noInjectedModel: !process.env.ANTHROPIC_MODEL,
+  inheritedKey: Boolean(process.env.ONEENDPOINT_API_KEY) }));
+process.exit(37);`;
+
 for (const tool of ['claude', 'dsh']) {
-  test(`${tool}: fake PATH launch verifies env/flags, preserves homes, propagates status, never persists key`, async t => {
+  test(`${tool}: plain fake PATH launch reads native settings, respects custom homes and propagates status`, async t => {
     const root = await fixture(t), env = await cliEnv(root), bin = path.join(root, 'bin'), report = path.join(root, 'report.json')
     await fs.mkdir(bin)
-    await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\nconst fs = require('node:fs'); fs.writeFileSync(process.env.REPORT, JSON.stringify({ args: process.argv.slice(2), env: Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(ANTHROPIC_|CLAUDE_|DSH_|HOME$|NODE_OPTIONS$)/.test(k)).map(([k,v]) => [k, k === 'ANTHROPIC_AUTH_TOKEN' ? v === process.env.ONEENDPOINT_API_KEY : v])), keyPresent: Boolean(process.env.ONEENDPOINT_API_KEY) })); process.exit(37);\n`, { mode: 0o700 })
-    Object.assign(env, { PATH: bin, REPORT: report, ANTHROPIC_API_KEY: 'poison', ANTHROPIC_BASE_URL: 'https://evil.invalid', CLAUDE_CONFIG_DIR: path.join(env.HOME, '.claude'), DSH_HOME: path.join(env.HOME, '.dsh'), CLAUDE_CODE_USE_BEDROCK: '1' })
+    await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\n${nativeProbe}`, { mode: 0o700 })
+    Object.assign(env, { PATH: bin, REPORT: report, EXPECTED_KEY: secret, EXPECTED_HOME: env.HOME, EXPECTED_CLAUDE: env.CLAUDE_CONFIG_DIR, EXPECTED_DSH: env.DSH_HOME, ANTHROPIC_API_KEY: 'poison', ANTHROPIC_BASE_URL: 'https://evil.invalid' })
     await fs.writeFile(path.join(env.HOME, 'sentinel'), 'original')
     const originalHome = await snapshot(env.HOME)
     const configured = await run(process.execPath, [cli, 'setup', '--tool', tool, '--model', 'public-model'], { env })
     assert.equal(configured.code, 0, configured.stderr)
     const doctor = await run(process.execPath, [cli, 'doctor', '--tool', tool], { env })
-    assert.equal(doctor.code, 0, doctor.stderr)
-    const result = await run(process.execPath, [cli, 'run', '--tool', tool, '--', ...(tool === 'claude' ? ['-p', 'hello'] : ['--help'])], { env })
+    assert.equal(doctor.code, 0, doctor.stderr + doctor.stdout)
+    if (tool === 'claude') assert.match(doctor.stdout, /environment|override|conflict/i)
+    const args = tool === 'claude' ? ['-p', 'hello'] : ['--help']
+    const result = await run(process.execPath, [cli, 'run', '--tool', tool, '--', ...args], { env })
     assert.equal(result.code, 37, result.stderr)
     const recorded = JSON.parse(await fs.readFile(report, 'utf8'))
-    assert.equal(recorded.keyPresent, true)
-    assert.ok(!JSON.stringify(recorded.args).includes(secret))
-    assert.equal(recorded.env.HOME, env.HOME)
-    assert.equal(recorded.env.ANTHROPIC_API_KEY, undefined)
-    if (tool === 'claude') {
-      assert.deepEqual(recorded.args.slice(0, 2), ['--setting-sources', 'user'])
-      assert.equal(recorded.env.ANTHROPIC_BASE_URL, 'https://1endpoint.dev/api/v1')
-      for (const name of MODEL_VARIABLES) assert.equal(recorded.env[name], 'public-model')
-      // Record only token presence/equality, never its bytes.
-      assert.equal(recorded.env.ANTHROPIC_AUTH_TOKEN, true)
-      assert.equal(recorded.env.DSH_HOME, undefined)
-    } else { assert.equal(recorded.args[0], '--profile'); assert.equal(recorded.env.CLAUDE_CONFIG_DIR, undefined) }
+    assert.deepEqual(recorded.args, tool === 'dsh' ? ['--profile', 'web', ...args] : args)
+    for (const name of ['mappingsPresent', 'keyPresent', 'homePreserved', 'nativeHomesPreserved', 'noInjectedAuth', 'noInjectedModel', 'conflictPreserved', 'inheritedKey']) assert.equal(recorded[name], true, name)
     assert.deepEqual(await snapshot(env.HOME), originalHome)
-    assert.ok(!JSON.stringify(await snapshot(env.ONEENDPOINT_HELPER_HOME)).includes(secret))
-    assert.ok(!`${configured.stdout}${doctor.stdout}${result.stdout}${result.stderr}`.includes(secret))
+    assert.ok(!`${configured.stdout}${doctor.stdout}${result.stdout}${result.stderr}${JSON.stringify(recorded)}`.includes(secret))
+    // Recovery journals are private and may contain credentials; legacy metadata stays secret-free.
+    const { plan } = await loadState(env.ONEENDPOINT_HELPER_HOME, tool)
+    for (const file of plan.files) assert.ok(!(await fs.readFile(file.path, 'utf8')).includes(secret))
     const blocked = await run(process.execPath, [cli, 'run', '--tool', tool, '--', `--model=${secret}`], { env })
     assert.equal(blocked.code, 1)
     assert.ok(!`${blocked.stdout}${blocked.stderr}`.includes(secret))
-    assert.ok(!JSON.stringify(await snapshot(env.ONEENDPOINT_HELPER_HOME)).includes(secret))
     const missing = await run(process.execPath, [cli, 'run', '--tool', tool], { env: { ...env, ONEENDPOINT_API_KEY: '' } })
     assert.equal(missing.code, 1)
+  })
+
+  test(`${tool}: legacy metadata migrates on repeated setup; reconfigure/remove restore native values and preserve edits`, async t => {
+    const root = await fixture(t), env = await cliEnv(root), stateDir = env.ONEENDPOINT_HELPER_HOME
+    const claudePath = path.join(env.CLAUDE_CONFIG_DIR, 'settings.json')
+    const dshPath = path.join(env.DSH_HOME, 'profiles', 'web', 'cordis.patch.yml')
+    const envPath = path.join(env.DSH_HOME, '.env')
+    const originalClaude = { model: 'previous-model', apiKeyHelper: 'previous-key-helper', permissions: { allow: ['Read'], deny: ['Bash'] }, hooks: { Stop: [] }, env: { ANTHROPIC_AUTH_TOKEN: 'previous-fixture-token', ANTHROPIC_DEFAULT_SONNET_MODEL: 'previous-sonnet', UNRELATED: 'keep' } }
+    const originalDsh = [
+      { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: { '1endpoint': { baseURL: 'https://previous.invalid', models: [{ id: 'previous-model' }] }, unrelated: { baseURL: 'https://unrelated.invalid' } } } },
+      { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: { provider: 'previous-provider', model: 'previous-model', unrelated: 'keep' } },
+      { id: 'permission-policy', config: { allow: ['read'], deny: ['shell'] } },
+    ]
+    await fs.mkdir(path.dirname(claudePath), { recursive: true })
+    await fs.mkdir(path.dirname(dshPath), { recursive: true })
+    await fs.writeFile(claudePath, JSON.stringify(originalClaude))
+    await fs.writeFile(dshPath, YAML.stringify(originalDsh))
+    await fs.writeFile(envPath, 'ONEENDPOINT_API_KEY="previous-fixture-key"\nUNRELATED=keep\n')
+    // Compatibility setup still creates only helper-owned metadata; migration happens at CLI boundary.
+    await setup({ stateDir, tool, model: 'old' })
+    const legacy = await snapshot(stateDir), nativeBefore = await snapshot(tool === 'claude' ? env.CLAUDE_CONFIG_DIR : env.DSH_HOME)
+    const invoke = args => run(process.execPath, [cli, ...args, '--tool', tool], { env })
+    let result = await invoke(['setup', '--model', 'old', '--dry-run'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(await snapshot(stateDir), legacy)
+    assert.deepEqual(await snapshot(tool === 'claude' ? env.CLAUDE_CONFIG_DIR : env.DSH_HOME), nativeBefore)
+    result = await invoke(['setup', '--model', 'old'])
+    assert.equal(result.code, 0, result.stderr)
+    if (tool === 'claude') {
+      const settings = JSON.parse(await fs.readFile(claudePath, 'utf8'))
+      assert.equal(settings.model, 'old')
+      assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN === secret, true)
+      assert.deepEqual(settings.permissions, originalClaude.permissions)
+      settings.theme = 'late-edit'; settings.env.UNRELATED = 'edited'
+      await fs.writeFile(claudePath, JSON.stringify(settings))
+    } else {
+      const rows = YAML.parse(await fs.readFile(dshPath, 'utf8'))
+      assert.equal(rows[1].config.model, 'old')
+      assert.equal((await fs.readFile(envPath, 'utf8')).includes(JSON.stringify(secret)), true)
+      rows[1].config.unrelated = 'edited'; rows.push({ id: 'late-edit', config: { enabled: true } })
+      await fs.writeFile(dshPath, YAML.stringify(rows))
+      await fs.appendFile(envPath, 'LATE_EDIT=keep\n')
+    }
+    const applied = await snapshot(root)
+    result = await invoke(['setup', '--model', 'old'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(await snapshot(root), applied)
+    result = await invoke(['setup', '--model', 'new'])
+    assert.equal(result.code, 1)
+    assert.deepEqual(await snapshot(root), applied)
+    result = await invoke(['reconfigure', '--model', 'new'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal((await loadState(stateDir, tool)).state.model, 'new')
+    const changed = await snapshot(root)
+    result = await invoke(['remove', '--dry-run'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(await snapshot(root), changed)
+    result = await invoke(['remove', '--yes'])
+    assert.equal(result.code, 0, result.stderr)
+    if (tool === 'claude') {
+      assert.deepEqual(JSON.parse(await fs.readFile(claudePath, 'utf8')), { ...originalClaude, theme: 'late-edit', env: { ...originalClaude.env, UNRELATED: 'edited' } })
+    } else {
+      const expected = structuredClone(originalDsh)
+      expected[1].config.unrelated = 'edited'; expected.push({ id: 'late-edit', config: { enabled: true } })
+      assert.deepEqual(YAML.parse(await fs.readFile(dshPath, 'utf8')), expected)
+      assert.equal(await fs.readFile(envPath, 'utf8'), 'ONEENDPOINT_API_KEY="previous-fixture-key"\nUNRELATED=keep\nLATE_EDIT=keep\n')
+    }
+    assert.equal(await exists(path.join(stateDir, 'native', `${tool}.json`)), false)
+    assert.equal(await exists(path.join(stateDir, `${tool}.json`)), false)
+    // The other tool's explicitly isolated native files never change.
+    if (tool === 'claude') assert.deepEqual(YAML.parse(await fs.readFile(dshPath, 'utf8')), originalDsh)
+    else assert.deepEqual(JSON.parse(await fs.readFile(claudePath, 'utf8')), originalClaude)
+    assert.ok(!`${result.stdout}${result.stderr}`.includes(secret))
   })
 }
 

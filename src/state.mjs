@@ -30,8 +30,9 @@ export const digest = data => createHash('sha256').update(data).digest('hex')
 // Reject symlinks in every existing ancestor, including an overridden state root.
 export async function assertSafePath(target) {
   const absolute = path.resolve(target)
-  const parts = absolute.split(path.sep).filter(Boolean)
-  let current = path.parse(absolute).root
+  const root = path.parse(absolute).root
+  const parts = absolute.slice(root.length).split(path.sep).filter(Boolean)
+  let current = root
   for (const part of parts) {
     current = path.join(current, part)
     try {

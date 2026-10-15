@@ -126,10 +126,10 @@ test('wizard reconfigure confirms independent tiers and discloses Claude safety'
   await keys(input, '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[B\u001b[B\r', '\r', '\r', '\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['reconfigure', '--tool', 'claude', '--haiku-model', 'public-model', '--sonnet-model', 'second-model', '--opus-model', 'public-model', '--model', 'second-model']])
-  assert.match(text(), /project\/local settings, hooks and permissions are excluded/)
-  assert.match(text(), /Managed policy remains active; no permission bypass/)
+  assert.match(text(), /permissions, hooks and project settings are preserved/)
+  assert.match(text(), /Project overrides and managed policies may take priority/)
   assert.match(text(), /Restart your Claude Code session/)
-  assert.ok(text().indexOf('Claude safety:') < text().indexOf('Update helper-owned'))
+  assert.ok(text().indexOf('Your permissions, hooks') < text().indexOf('Update claude user configuration'))
 })
 
 test('wizard DSH run offers optional profiles', async () => {
@@ -157,7 +157,7 @@ test('wizard force recovery warns and requires explicit confirmation', async () 
   await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[A\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['remove', '--tool', 'dsh', '--yes', '--force']])
-  assert.match(text(), /WARNING:.*without backup/)
+  assert.match(text(), /WARNING:.*saved previous values/)
 })
 
 test('wizard Escape safely cancels and Exit does not dispatch', async () => {
@@ -194,9 +194,9 @@ test('language is first and Vietnamese setup confirmation/restart stay localized
   await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'public-model'], context: { language: 'vi' } }])
-  assert.match(text(), /Tạo cấu hình riêng/)
+  assert.match(text(), /Áp dụng cấu hình dsh/)
   assert.match(text(), /Khởi động lại phiên DSH/)
-  const localized = text().slice(text().indexOf('cấu hình riêng'))
+  const localized = text().slice(text().indexOf('Áp dụng cấu hình dsh'))
   assert.doesNotMatch(localized, /Confirm|Loading public|Restart your|Choose coding/)
 })
 

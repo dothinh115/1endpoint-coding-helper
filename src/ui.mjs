@@ -329,8 +329,8 @@ export async function wizard({ dispatch, input = process.stdin, output = process
         }
         argv.push('--model', selected.sonnet)
       }
-      if (tool === 'claude') output.write(colorize(t('Claude safety: project/local settings, hooks and permissions are excluded. Managed policy remains active; no permission bypass is enabled.\n', 'An toàn Claude: không dùng cài đặt dự án/cục bộ, móc thực thi và quyền của dự án. Chính sách quản trị vẫn áp dụng; không bật bỏ qua quyền.\n'), 'warning', { output }))
-      if (!await confirm(t(`${action === 'setup' ? 'Create' : 'Update'} helper-owned ${tool} configuration? Existing user settings are not edited.`, `${action === 'setup' ? 'Tạo' : 'Cập nhật'} cấu hình riêng cho ${tool}? Không sửa cài đặt hiện có của người dùng.`))) return
+      if (tool === 'claude') output.write(colorize(t('Your permissions, hooks and project settings are preserved. Project overrides and managed policies may take priority.\n', 'Giữ nguyên quyền, hook và cài đặt dự án. Cấu hình dự án và chính sách quản trị có thể được ưu tiên.\n'), 'warning', { output }))
+      if (!await confirm(t(`${action === 'setup' ? 'Apply' : 'Update'} ${tool} user configuration? Unrelated settings are preserved.`, `${action === 'setup' ? 'Áp dụng' : 'Cập nhật'} cấu hình ${tool}? Giữ nguyên cài đặt không liên quan.`))) return
     }
     if (action === 'run' && tool === 'dsh') {
       const profile = await choose(t('Choose DSH launch profile', 'Chọn chế độ khởi chạy DSH'), [
@@ -343,21 +343,21 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       const mode = await choose(t('Remove helper configuration', 'Xóa cấu hình riêng'), [
         { label: t('Cancel', 'Hủy'), value: 'cancel' },
         { label: t('Normal removal', 'Xóa thông thường'), value: 'normal', description: t('Validate ownership and integrity', 'Kiểm tra quyền sở hữu và tính toàn vẹn') },
-        { label: t('Force removal recovery', 'Khôi phục bằng xóa cưỡng chế'), value: 'force', description: t('WARNING: modified fixed helper files may be deleted without backup', 'CẢNH BÁO: tệp cấu hình đã sửa có thể bị xóa mà không sao lưu') }
+        { label: t('Force removal recovery', 'Khôi phục bằng xóa cưỡng chế'), value: 'force', description: t('Restore managed fields even if they were edited', 'Khôi phục các trường đã quản lý kể cả khi đã được sửa') }
       ])
       if (mode === 'cancel') return
-      if (mode === 'force') output.write(colorize(t('WARNING: Force recovery deletes fixed helper configuration paths, including modified contents, without backup.\n', 'CẢNH BÁO: xóa cưỡng chế xóa các đường dẫn cấu hình riêng cố định, kể cả nội dung đã sửa, không sao lưu.\n'), 'warning', { output }))
+      if (mode === 'force') output.write(colorize(t('WARNING: Force recovery replaces managed model/authentication fields with their saved previous values. Other preferences are preserved.\n', 'CẢNH BÁO: khôi phục cưỡng chế thay các trường model/xác thực đã quản lý bằng giá trị trước đó. Giữ nguyên tùy chọn khác.\n'), 'warning', { output }))
       context.removeKey = await choose(t('Saved key for this tool', 'Khóa đã lưu cho công cụ này'), [
         { label: t('Keep saved key', 'Giữ khóa đã lưu'), value: false },
         { label: t('Remove saved key too', 'Xóa cả khóa đã lưu'), value: true }
       ])
-      if (!await confirm(mode === 'force' ? t('Confirm forced recovery deletion without backup?', 'Xác nhận xóa cưỡng chế không sao lưu?') : t('Confirm removal of helper-owned configuration?', 'Xác nhận xóa cấu hình riêng?'))) return
+      if (!await confirm(mode === 'force' ? t('Restore previous managed settings?', 'Khôi phục các cài đặt đã quản lý trước đó?') : t('Confirm removal of helper-owned configuration?', 'Xác nhận xóa cấu hình riêng?'))) return
       argv.push('--yes')
       if (mode === 'force') argv.push('--force')
     }
     const result = await dispatch(argv, context)
     if (action === 'setup' || action === 'reconfigure') {
-      const warning = t(`Restart your ${tool === 'dsh' ? 'DSH' : 'Claude Code'} session to apply. Existing sessions do not update automatically. Start a new session through coding-helper.\n`, `Khởi động lại phiên ${tool === 'dsh' ? 'DSH' : 'Claude Code'} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới thông qua coding-helper.\n`)
+      const warning = t(`Restart your ${tool === 'dsh' ? 'DSH' : 'Claude Code'} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`, `Khởi động lại phiên ${tool === 'dsh' ? 'DSH' : 'Claude Code'} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`)
       const colored = colorize(warning, 'warning', { output })
       output.write(colored === warning ? warning : `\u001b[1m${colored}\u001b[0m`)
     }

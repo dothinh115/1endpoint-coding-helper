@@ -2,14 +2,17 @@
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import spawn from 'cross-spawn'
 import { wizard, colorize } from './ui.mjs'
-import { setup, reconfigure, remove, backup, loadState, stateRoot, validateTool, assertSafePath } from './state.mjs'
-import { launchClaude, childEnvironment } from './adapters/claude.mjs'
+import { setup, reconfigure, remove, backup, loadState, stateRoot, validateTool } from './state.mjs'
+import { launchClaude } from './adapters/claude.mjs'
 import { launchDsh } from './adapters/dsh.mjs'
 import { getCredential, saveCredential, removeCredential } from './credentials.mjs'
+import { applyClaude, removeClaude, inspectClaude } from './native/claude.mjs'
+import { applyDsh, removeDsh, inspectDsh } from './native/dsh.mjs'
+import { nativeWarnings } from './native/diagnostics.mjs'
 
-const HELP = `@1endpoint/coding-helper — isolated 1endpoint coding-tool setup
+const HELP = `@1endpoint/coding-helper — native 1endpoint coding-tool setup
 
 Usage:
   coding-helper setup --tool dsh|claude --model PUBLIC_MODEL [--dry-run] [--update]
@@ -28,9 +31,11 @@ Node.js >=22.19 is required.
 Paste your API key privately in the menu, or press Enter on Open Console to create one.
 Pasted keys are saved automatically for the selected tool. Saved files are private plaintext, not encrypted.
 ONEENDPOINT_API_KEY remains an optional environment override; never pass keys as arguments.
-State: ONEENDPOINT_HELPER_HOME or ~/.1endpoint/coding-helper (isolated tool homes).
-No existing DSH/Claude settings are edited. Setup/doctor make no API requests.
-Claude launch excludes project/local settings, hooks and permissions; managed policy applies.
+State: ONEENDPOINT_HELPER_HOME or ~/.1endpoint/coding-helper (recovery and connection metadata).
+Setup updates native Claude/DSH user settings while preserving unrelated preferences.
+Restart, then run claude or dsh web directly. Custom CLAUDE_CONFIG_DIR/DSH_HOME are respected.
+Project/local settings and managed policies can override user settings; they are not rewritten.
+Setup/doctor make no inference requests. Private recovery records may contain previous credentials.
 Run is explicit opt-in to tool startup and potentially billed requests. Normal permission prompts remain.
 --update changes an existing helper-owned model only after hash validation; back up first.
 `
@@ -46,7 +51,7 @@ function parse(argv) {
     if (options[arg] !== undefined || !args.length || args[0].startsWith('-')) throw new Error('Missing or duplicate option value.')
     options[arg] = args.shift()
   }
-  const allowed = { setup: ['--tool', '--model', '--dry-run', '--update', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], reconfigure: ['--tool', '--model', '--dry-run', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], remove: ['--tool', '--yes', '--dry-run', '--force', '--remove-key'], doctor: ['--tool'], backup: ['--tool'], run: ['--tool', '--profile'] }
+  const allowed = { setup: ['--tool', '--model', '--profile', '--dry-run', '--update', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], reconfigure: ['--tool', '--model', '--profile', '--dry-run', '--haiku-model', '--sonnet-model', '--opus-model', '--fable-model'], remove: ['--tool', '--yes', '--dry-run', '--force', '--remove-key'], doctor: ['--tool'], backup: ['--tool'], run: ['--tool', '--profile'] }
   if (!allowed[command] || Object.keys(options).some(key => !allowed[command].includes(key)) || (command !== 'run' && forwarded.length)) throw new Error('Invalid command/options. Use --help.')
   validateTool(options['--tool'])
   if (options['--tool'] !== 'claude' && ['haiku', 'sonnet', 'opus', 'fable'].some(role => options[`--${role}-model`])) throw new Error('Tier model flags are only supported for Claude.')
@@ -79,6 +84,11 @@ async function main(argv, context = {}) {
   const t = (en, vi) => context.language === 'vi' ? vi : en
   const tool = options['--tool'], stateDir = stateRoot()
   if (command === 'remove') {
+    if (!options['--yes'] && !options['--dry-run']) throw new Error(t('Confirm removal with --yes or preview with --dry-run.', 'Xác nhận xóa bằng --yes hoặc xem trước bằng --dry-run.'))
+    // Validate both layers before changing either one; never trust paths from the legacy manifest.
+    await remove({ stateDir, tool, dryRun: true, force: options['--force'] })
+    const restored = await (tool === 'claude' ? removeClaude : removeDsh)({ stateDir, dryRun: Boolean(options['--dry-run']), force: Boolean(options['--force']) })
+    if (restored.changed) console.log(t('Previous native tool settings restored.', 'Đã khôi phục cài đặt công cụ trước đó.'))
     const result = await remove({ stateDir, tool, dryRun: options['--dry-run'], yes: options['--yes'], force: options['--force'] })
     console.log(`${result.dryRun ? t('Preview removal', 'Xem trước việc xóa') : result.changed ? t('Removed helper configuration', 'Đã xóa cấu hình riêng') : t('Already removed', 'Cấu hình đã được xóa')}: ${tool}`)
     for (const file of result.files) console.log(`  ${file}`)
@@ -86,23 +96,36 @@ async function main(argv, context = {}) {
       await removeCredential({ stateDir, tool, dryRun: Boolean(options['--dry-run']) })
       console.log(options['--dry-run'] ? t('Saved-key removal preview only.', 'Chỉ xem trước việc xóa khóa đã lưu.') : t('Saved API key removed (if present).', 'Đã xóa khóa API đã lưu (nếu có).'))
     }
-    if (result.force) console.log(t('Forced recovery removes only fixed helper configuration paths; modified contents are not backed up.', 'Khôi phục cưỡng chế chỉ xóa đường dẫn cấu hình riêng cố định; nội dung đã sửa không được sao lưu.'))
+    if (result.force) console.log(t('Forced recovery restores only managed native fields and removes helper connection metadata. Unrelated settings are preserved.', 'Khôi phục cưỡng chế chỉ khôi phục các trường do helper quản lý và xóa thông tin kết nối. Giữ nguyên cài đặt không liên quan.'))
     console.log(t('Original tool settings, conversations and backups are unchanged.', 'Cài đặt gốc, hội thoại và bản sao lưu được giữ nguyên.'))
     return
   }
   if (command === 'setup' || command === 'reconfigure') {
     const selectedRoles = Object.fromEntries(['haiku', 'sonnet', 'opus', 'fable'].filter(role => options[`--${role}-model`]).map(role => [role, options[`--${role}-model`]]))
-    const result = await (command === 'reconfigure' ? reconfigure : setup)({ stateDir, tool, model: options['--model'] || selectedRoles.sonnet, roles: Object.keys(selectedRoles).length ? selectedRoles : undefined, dryRun: options['--dry-run'], update: options['--update'] })
+    const request = { stateDir, tool, model: options['--model'] || selectedRoles.sonnet, roles: Object.keys(selectedRoles).length ? selectedRoles : undefined, dryRun: options['--dry-run'], update: options['--update'] }
+    const operation = command === 'reconfigure' ? reconfigure : setup
+    // Preflight helper state and native targets before writing configuration.
+    await operation({ ...request, dryRun: true })
+    const credential = context.apiKey ? { key: context.apiKey } : await getCredential({ stateDir, tool })
+    if (!credential.key && !request.dryRun) throw new Error(t('Add an API key in the menu before applying configuration.', 'Thêm khóa API trong menu trước khi áp dụng cấu hình.'))
+    const nativeOptions = { stateDir, model: request.model, roles: request.roles, key: credential.key || (request.dryRun ? 'dry-run-placeholder' : undefined), profile: options['--profile'] || 'web' }
+    await (tool === 'claude' ? applyClaude : applyDsh)({ ...nativeOptions, dryRun: true })
+    const result = await operation(request)
+    let native
+    try { native = await (tool === 'claude' ? applyClaude : applyDsh)({ ...nativeOptions, dryRun: Boolean(request.dryRun) }) }
+    catch { throw new Error(t('Native settings were not applied. Connection metadata may have changed; retry setup/reconfigure after resolving the native configuration conflict.', 'Chưa áp dụng được cài đặt công cụ. Thông tin kết nối có thể đã đổi; xử lý xung đột cấu hình rồi chạy lại setup/reconfigure.')) }
+    const nativePath = native.path || native.paths?.profilePatch
+    if (nativePath) console.log(`${t('Native configuration', 'Cấu hình công cụ')}: ${nativePath}`)
+    for (const warning of [...(native.warnings || []), ...await nativeWarnings({ tool })]) console.log(colorize(warning, 'warning'))
     console.log(`${result.dryRun ? t('Preview only', 'Chỉ xem trước') : result.changed ? t('Configured', 'Đã cấu hình') : t('Already configured', 'Cấu hình không thay đổi')}: ${tool}`)
     for (const file of result.files) console.log(`  ${file.path}`)
-    if (context.language !== 'vi') for (const hint of result.hints || []) console.log(hint)
-    else console.log(tool === 'claude' ? 'Không nạp cài đặt, hook và quyền project/local. Chính sách quản trị vẫn áp dụng; không bỏ qua quyền.' : 'DSH dùng home và cấu hình riêng; không sửa cài đặt gốc. Chế độ sdk-minimal không được hỗ trợ.')
+    console.log(t('Unrelated preferences, hooks and permissions are preserved. Project and managed policies still apply.', 'Giữ nguyên tùy chọn, hook và quyền không liên quan. Cài đặt project và chính sách quản trị vẫn áp dụng.'))
     if (!result.dryRun && context.apiKey && context.saveKey) {
       await saveCredential({ stateDir, tool, key: context.apiKey })
       console.log(t('API key saved privately for this tool. Local storage is not encrypted.', 'Đã lưu khóa API riêng cho công cụ này. Tệp lưu cục bộ không được mã hóa.'))
     } else if (context.apiKey) console.log(t('API key is available for this session only.', 'Khóa API chỉ dùng trong phiên này.'))
     else console.log(t('Use the interactive menu to paste an API key, or provide ONEENDPOINT_API_KEY in your environment.', 'Mở menu để dán khóa API, hoặc cung cấp ONEENDPOINT_API_KEY qua môi trường.'))
-    if (!result.dryRun && !context.language) console.log(colorize('RESTART REQUIRED: existing sessions are not updated. Start a new session through coding-helper run --tool ' + tool + '.', 'warning'))
+    if (!result.dryRun && !context.language) console.log(colorize('RESTART REQUIRED: close existing sessions, then run ' + (tool === 'claude' ? 'claude' : 'dsh web') + ' directly.', 'warning'))
     return
   }
   if (command === 'backup') { console.log('Secret-free configuration backup: ' + await backup({ stateDir, tool })); return }
@@ -114,8 +137,10 @@ async function main(argv, context = {}) {
     console.log(`${t('CLI installed', 'Đã cài CLI')}: ${bin ? t('yes', 'có') : t('no', 'chưa')}`)
     console.log(`${t('API key', 'Khóa API')}: ${credential.key ? t('available (not validated)', 'đã có (chưa xác thực)') : t('missing', 'chưa có')}`)
     console.log(t('No credentials read from tool files. No network or inference check performed.', 'Không đọc thông tin đăng nhập từ tệp công cụ. Không kiểm tra mạng hoặc gọi mô hình.'))
-    if (context.language !== 'vi') for (const hint of plan.hints || []) console.log(hint)
-    if (!bin || !credential.key) process.exitCode = 1
+    const native = await (tool === 'claude' ? inspectClaude : inspectDsh)({ stateDir })
+    console.log(`${t('Native setup', 'Cấu hình công cụ')}: ${native.configured && !native.drift ? t('applied', 'đã áp dụng') : t('missing or modified; run setup/reconfigure', 'chưa có hoặc đã thay đổi; chạy setup/reconfigure')}`)
+    for (const warning of [...(native.warnings || []), ...await nativeWarnings({ tool })]) console.log(colorize(warning, 'warning'))
+    if (!bin || !credential.key || !native.configured || native.drift) process.exitCode = 1
     return
   }
   if (!bin) throw new Error('CLI not found on PATH. Install the tool from its official distribution first.')
@@ -125,9 +150,11 @@ async function main(argv, context = {}) {
   let launch
   try { launch = (tool === 'dsh' ? launchDsh : launchClaude)({ stateDir, model: state.model, roleModels: state.roles, args: forwarded, profile: options['--profile'] || 'web' }) }
   catch { throw new Error('Unsupported tool arguments: routing, agent/plugin and permission-bypass overrides are not allowed.') }
-  await assertSafePath(launch.env.DSH_HOME || launch.env.CLAUDE_CONFIG_DIR)
-  await fs.mkdir(launch.env.DSH_HOME || launch.env.CLAUDE_CONFIG_DIR, { recursive: true, mode: 0o700 })
-  const child = spawn(bin, launch.args, { stdio: 'inherit', env: childEnvironment(process.env, launch, key), shell: false })
+  const native = await (tool === 'claude' ? inspectClaude : inspectDsh)({ stateDir })
+  if (!native.configured || native.drift) throw new Error(t('Apply native configuration with setup/reconfigure before starting the tool.', 'Áp dụng cấu hình công cụ bằng setup/reconfigure trước khi khởi chạy.'))
+  // Use native homes/settings; the helper launcher is now optional, not a separate isolated profile.
+  const args = tool === 'claude' ? forwarded : ['--profile', options['--profile'] || native.profile || 'web', ...forwarded]
+  const child = spawn(bin, args, { stdio: 'inherit', env: { ...process.env }, shell: false })
   const signals = ['SIGINT', 'SIGTERM']
   const handlers = signals.map(signal => { const handler = () => child.kill(signal); process.on(signal, handler); return [signal, handler] })
   await new Promise((resolve, reject) => {

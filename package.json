@@ -1,7 +1,7 @@
 {
   "name": "@1endpoint/coding-helper",
-  "version": "0.1.4",
-  "description": "Safe isolated 1endpoint setup for DeepSeek Harness and Claude Code CLI",
+  "version": "0.1.5",
+  "description": "Native 1endpoint setup for DeepSeek Harness and Claude Code CLI",
   "type": "module",
   "bin": {
     "1endpoint-helper": "src/cli.mjs",
@@ -41,5 +41,9 @@
     "claude-code",
     "cli",
     "setup"
-  ]
+  ],
+  "dependencies": {
+    "cross-spawn": "7.0.6",
+    "yaml": "2.8.1"
+  }
 }
