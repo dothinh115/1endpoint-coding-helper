@@ -1,0 +1,45 @@
+{
+  "name": "@1endpoint/coding-helper",
+  "version": "0.1.0",
+  "description": "Safe isolated 1endpoint setup for DeepSeek Harness and Claude Code CLI",
+  "type": "module",
+  "bin": {
+    "1endpoint-helper": "src/cli.mjs",
+    "coding-helper": "src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "yarn@4.17.0",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/cli.mjs",
+    "prepack": "yarn check && yarn test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dothinh115/1endpoint-coding-helper.git"
+  },
+  "homepage": "https://console.1endpoint.dev/docs/guides/coding-tools",
+  "bugs": {
+    "url": "https://github.com/dothinh115/1endpoint-coding-helper/issues"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "1endpoint",
+    "deepseek",
+    "harness",
+    "claude-code",
+    "cli",
+    "setup"
+  ]
+}
