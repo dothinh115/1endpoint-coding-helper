@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
+import { TOOL_INFO } from '../src/tools.mjs'
 import { select, colorize, wizard as terminalWizard, readApiKey } from '../src/ui.mjs'
 
 const wizard = options => terminalWizard({ isToolInstalled: async () => true, ...options })
@@ -171,7 +172,7 @@ test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async ()
   assert.doesNotMatch(text(), /yes\/no|y\/n/i)
 })
 
-for (const tool of ['dsh', 'claude']) for (const action of ['setup', 'reconfigure', 'run']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
+for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'reconfigure', 'run']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
   const { input, output, text } = tty()
   const checked = [], calls = []
   let keyChecks = 0, catalogLoads = 0
@@ -179,16 +180,16 @@ for (const tool of ['dsh', 'claude']) for (const action of ['setup', 'reconfigur
     getKeyStatus: async () => { keyChecks++; return { available: true } },
     loadModels: async () => { catalogLoads++; return [{ id: 'model' }] }, dispatch: argv => calls.push(argv) })
   const actionKeys = action === 'setup' ? '\r' : action === 'reconfigure' ? '\u001b[B\r' : '\u001b[A\u001b[A\r'
-  await keys(input, '\r', actionKeys, tool === 'dsh' ? '\r' : '\u001b[B\r')
+  await keys(input, '\r', actionKeys, '\u001b[B'.repeat(Object.keys(TOOL_INFO).indexOf(tool)) + '\r')
   if (!checked.length) input.write('\u0003')
   await pending
   assert.deepEqual(checked, [tool])
   assert.deepEqual(calls, [])
   assert.equal(keyChecks, 0)
   assert.equal(catalogLoads, 0)
-  assert.match(text(), tool === 'dsh' ? /DeepSeek Harness \(DSH\) is not installed or "dsh" is not on PATH/ : /Claude Code is not installed or "claude" is not on PATH/)
+  assert.ok(text().includes(`${TOOL_INFO[tool].name} is not installed or "${tool}" is not on PATH`))
   assert.match(text(), /Install it first, then reopen your terminal/)
-  assert.ok(text().includes(tool === 'dsh' ? 'https://github.com/deepseek-ai/deepseek-harness' : 'https://code.claude.com/docs/en/overview'))
+  assert.ok(text().includes(TOOL_INFO[tool].installUrl))
   assert.doesNotMatch(text(), /Paste API key|Loading public|Select public model/)
   cleanListeners(input, output)
 })
@@ -456,5 +457,17 @@ for (const columns of [80, 120]) test(`menu wraps full Vietnamese/model labels a
   const rendered = text().replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/\n/g, '')
   assert.ok(rendered.includes(label))
   assert.doesNotMatch(text(), /…/)
+  cleanListeners(input, output)
+})
+
+for (const [tool, index] of [['openclaw', 2], ['hermes', 3]]) test(`${tool} wizard selects one model and dispatches native setup`, async () => {
+  const { input, output, text } = tty()
+  const calls = []
+  const pending = wizard({ input, output, isToolInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'public-model' }], dispatch: argv => calls.push(argv) })
+  await keys(input, '\r', '\r', '\u001b[B'.repeat(index) + '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
+  await pending
+  assert.deepEqual(calls, [['setup', '--tool', tool, '--model', 'public-model']])
+  assert.doesNotMatch(text(), /Select the tiers/)
+  assert.ok(text().includes(tool === 'openclaw' ? 'openclaw tui' : 'hermes'))
   cleanListeners(input, output)
 })

@@ -10,6 +10,7 @@ __metadata:
   resolution: "@1endpoint/coding-helper@workspace:."
   dependencies:
     cross-spawn: "npm:7.0.6"
+    json5: "npm:2.2.3"
     yaml: "npm:2.8.1"
   bin:
     1endpoint-helper: src/cli.mjs
@@ -32,6 +33,15 @@ __metadata:
   version: 2.0.0
   resolution: "isexe@npm:2.0.0"
   checksum: 10c0/228cfa503fadc2c31596ab06ed6aa82c9976eec2bfd83397e7eaf06d0ccf42cd1dfd6743bf9aeb01aebd4156d009994c5f76ea898d2832c1fe342da923ca457d
+  languageName: node
+  linkType: hard
+
+"json5@npm:2.2.3":
+  version: 2.2.3
+  resolution: "json5@npm:2.2.3"
+  bin:
+    json5: lib/cli.js
+  checksum: 10c0/5a04eed94810fa55c5ea138b2f7a5c12b97c3750bc63d11e511dcecbfef758003861522a070c2272764ee0f4e3e323862f386945aeb5b85b87ee43f084ba586c
   languageName: node
   linkType: hard
 

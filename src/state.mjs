@@ -4,13 +4,15 @@ import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { createClaudePlan } from './adapters/claude.mjs'
 import { createDshPlan } from './adapters/dsh.mjs'
+import { createAgentPlan } from './adapters/agents.mjs'
+import { TOOL_INFO } from './tools.mjs'
 
-export const tools = ['dsh', 'claude']
+export const tools = Object.keys(TOOL_INFO)
 export function stateRoot(env = process.env) {
   return path.resolve(env.ONEENDPOINT_HELPER_HOME || path.join(os.homedir(), '.1endpoint', 'coding-helper'))
 }
 export function validateTool(tool) {
-  if (!tools.includes(tool)) throw new Error('Choose --tool dsh or --tool claude.')
+  if (!tools.includes(tool)) throw new Error('Choose --tool ' + tools.join('|') + '.')
   return tool
 }
 export function validateModel(model) {
@@ -23,6 +25,7 @@ export function planFor({ stateDir, tool, model, roles }) {
     if (tool !== 'claude' || !roles || typeof roles !== 'object' || Array.isArray(roles) || Object.keys(roles).some(key => !['haiku', 'sonnet', 'opus', 'fable'].includes(key))) throw new Error('Invalid Claude model role mapping.')
     for (const value of Object.values(roles)) validateModel(value)
   }
+  if (['openclaw', 'hermes'].includes(tool)) return createAgentPlan({ stateDir, tool, model })
   return (tool === 'dsh' ? createDshPlan : createClaudePlan)({ stateDir, model, roleModels: roles })
 }
 export const digest = data => createHash('sha256').update(data).digest('hex')

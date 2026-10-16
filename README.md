@@ -1,11 +1,11 @@
 # @1endpoint/coding-helper
 
-Connect **DeepSeek Harness (DSH)** or **Claude Code** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
+Connect **DeepSeek Harness (DSH)**, **Claude Code**, **OpenClaw** or **Hermes** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
 
 ## Before you start
 
 - Install **Node.js 22.19 or newer**.
-- Install [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) or [Claude Code](https://code.claude.com/docs/en/overview) separately. The helper configures these tools; it does not install them.
+- Install the tool you want to configure first: [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.claude.com/docs/en/overview), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
 - Have a 1endpoint API key ready. Keep it private: do not paste it into command arguments, shared configuration files or a repository.
 
 ## 1. Set up your tool
@@ -18,7 +18,7 @@ npx @1endpoint/coding-helper
 
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
-3. Select **DeepSeek Harness (DSH)** or **Claude Code**. Before Setup, Reconfigure or Run continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
+3. Select the tool you want to configure. Before Setup, Reconfigure or Run continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
 4. Paste your key into the **masked API-key prompt**, or select **Open Console** and press Enter to create one first. If a saved key is available, choose **Use an existing key** to reuse it.
 5. Select models from the 1endpoint catalog.
 6. Review the selection, then choose **Confirm**. The key is saved automatically and the tool's native user configuration is updated.
@@ -32,6 +32,8 @@ Most text uses your terminal's default color. Cyan marks the current choice, yel
 ### Choose models
 
 For DSH, choose the model you want to use by default. Setup targets the **web** profile by default. Scripted setup/reconfiguration can select `--profile web`, `headless`, `acp` or `sdk`; `sdk-minimal` is not supported. Start the same profile you configured.
+
+For OpenClaw and Hermes, choose one default model. OpenClaw setup preserves gateway settings and agent-specific overrides; use its existing gateway lifecycle. Hermes preserves auxiliary-model and fallback-provider settings.
 
 For Claude Code, choose a 1endpoint model for each tier: **Haiku**, **Sonnet** and **Opus**. Each tier can use a different model. Sonnet is the main/default selection and the default subagent model. Select optional **Fable** mapping only if your installed Claude Code version supports it; otherwise keep the standard three-tier option.
 
@@ -53,7 +55,9 @@ Start Claude Code:
 claude
 ```
 
-**You do not need the helper to launch the tool.** Its optional **Run** action and `run --tool dsh|claude` command use the native configuration too. Tool requests may incur charges; normal permission, onboarding and workspace-trust prompts remain active.
+Start Hermes with `hermes`. For OpenClaw, restart your configured gateway using its normal lifecycle, then open `openclaw tui`. The helper does not install, start or alter a background gateway service.
+
+**You do not need the helper to launch the tool.** Its optional **Run** action and `run --tool dsh|claude|openclaw|hermes` command use the native configuration too. Tool requests may incur charges; normal permission, onboarding and workspace-trust prompts remain active.
 
 ### What stays in place
 
@@ -73,6 +77,8 @@ These are path conventions, not a claim that Windows or Linux end-to-end behavio
 
 - **Claude Code:** `CLAUDE_CONFIG_DIR` selects the configuration directory; setup writes its `settings.json`. Use an absolute path (or the supported `~/` form).
 - **DSH:** `DSH_HOME` selects the native home. Setup manages the relevant entries in `profiles/<profile>/cordis.patch.yml` and, when needed, the home `cordis.patch.yml`, plus the API-key entry in `.env`. An existing managed credential reference for that key is reconciled when necessary.
+- **OpenClaw:** setup updates `~/.openclaw/openclaw.json`, respecting `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`. It manages the 1endpoint provider, selected model entry and default model/fallback selection. Existing unrelated model entries, tools, channel credentials and gateway settings stay intact. JSON5 is accepted; formatting/comments may be normalized. Configurations using `$include` or external read-only management are refused rather than flattened. Use an explicit state directory for named profiles.
+- **Hermes:** setup updates `~/.hermes/config.yaml` (`%LOCALAPPDATA%\hermes\config.yaml` on Windows), respecting `HERMES_HOME`. It manages the named 1endpoint provider and main model connection fields, without changing `.env`, auth pools, auxiliary models, permissions or sessions. YAML formatting/comments may be normalized.
 - **Helper state:** defaults to `~/.1endpoint/coding-helper`. Set an absolute `ONEENDPOINT_HELPER_HOME` to relocate it; this does not relocate the native tool homes.
 
 Set custom paths **before setup** and use those same path variables when running the tool, reconfiguring, checking or removing the connection. For example, on macOS/Linux:
@@ -91,6 +97,8 @@ On Windows, set the corresponding variables in your shell, using an absolute pat
 ```bash
 npx @1endpoint/coding-helper doctor --tool dsh
 npx @1endpoint/coding-helper doctor --tool claude
+npx @1endpoint/coding-helper doctor --tool openclaw
+npx @1endpoint/coding-helper doctor --tool hermes
 ```
 
 Run the command for your selected tool. Doctor and Remove remain available even after uninstalling the native tool. Doctor checks native setup, whether the executable is installed, key availability and detectable overrides/drift. It does not validate your key against the server or make an inference request. Review its warnings rather than deleting existing configuration blindly.
@@ -103,7 +111,7 @@ Open the helper, select **Reconfigure**, choose the tool, and select new models:
 npx @1endpoint/coding-helper
 ```
 
-Reconfiguration updates managed native fields while retaining the original pre-setup baseline in a private recovery journal. **Restart the tool, then run `claude` or `dsh web` normally.**
+Reconfiguration updates managed native fields while retaining the original pre-setup baseline in a private recovery journal. **Restart the configured tool before using it normally.**
 
 If you used an older helper-only/isolated setup, rerun **Setup** with the same model mapping and choose your saved key, or use **Reconfigure**. This applies the connection to your actual native user configuration; an old helper setup alone does not configure ordinary tool launches.
 
@@ -135,7 +143,7 @@ npx @1endpoint/coding-helper remove --tool dsh --dry-run
 npx @1endpoint/coding-helper remove --tool dsh --yes
 ```
 
-Use `--tool claude` for Claude Code. Removal restores only the managed native values to their pre-setup baseline, removing values that did not previously exist. It preserves unrelated edits, permissions, hooks, providers and runtime conversations. **It is not a whole-file reset.** Restart the tool after removal to use the restored settings.
+Use `--tool claude`, `--tool openclaw` or `--tool hermes` for the other tools. Removal restores only the managed native values to their pre-setup baseline, removing values that did not previously exist. It preserves unrelated edits, permissions, hooks, providers and runtime conversations. **It is not a whole-file reset.** Restart the tool after removal to use the restored settings.
 
 The menu asks whether to **keep or delete the helper's saved API key**. Scripted removal retains it unless you explicitly add `--remove-key`:
 
@@ -158,8 +166,8 @@ Force recovery is limited to the managed values and helper-owned connection file
 
 ## Keys and privacy
 
-- Keys are saved automatically on confirmed setup/reconfiguration; there is no storage-choice prompt. DSH and Claude Code have separate helper key stores.
-- The helper's saved key, Claude native authentication settings, DSH native `.env` and any managed credential reference are **private plaintext, not encrypted**. Private recovery journals may contain prior credentials and other previous configuration. Protect these locations and any backups you make; do not commit or share them.
+- Keys are saved automatically on confirmed setup/reconfiguration; there is no storage-choice prompt. Each tool has its own helper key store.
+- The helper's saved key, Claude native authentication settings, DSH native `.env`, OpenClaw/Hermes native provider credentials and any managed credential reference are **private plaintext, not encrypted**. Private recovery journals may contain prior credentials and other previous configuration. Protect these locations and any backups you make; do not commit or share them.
 - Sensitive files are written with mode **0600** and newly created private directories with **0700** on POSIX systems. Windows permissions depend on your account/filesystem access controls. Other processes running as your user may still access the data.
 - The key prompt is masked; do not put keys in command arguments. The helper does not print key values in normal output or logs.
 - An explicit helper session key takes priority, followed by `ONEENDPOINT_API_KEY`, then the tool's saved helper key. Inherited native authentication variables may override ordinary tool behavior. If an inherited key conflicts with native DSH setup, reconcile or unset it before applying setup.

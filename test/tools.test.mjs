@@ -46,3 +46,9 @@ test('non-executable files do not count as installed on POSIX', { skip: process.
   await fs.writeFile(path.join(root, 'claude'), 'not executable', { mode: 0o600 })
   assert.equal(await findExecutable('claude', { PATH: root }), null)
 })
+
+test('package description stays generic as tool support expands', async () => {
+  const metadata = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(metadata.description, 'Native 1endpoint setup for coding tools and agents')
+  assert.equal(metadata.files.includes('docs'), false)
+})

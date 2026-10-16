@@ -1,7 +1,7 @@
 {
   "name": "@1endpoint/coding-helper",
-  "version": "0.1.6",
-  "description": "Native 1endpoint setup for DeepSeek Harness and Claude Code CLI",
+  "version": "0.1.7",
+  "description": "Native 1endpoint setup for coding tools and agents",
   "type": "module",
   "bin": {
     "1endpoint-helper": "src/cli.mjs",
@@ -10,8 +10,7 @@
   "files": [
     "src",
     "README.md",
-    "LICENSE",
-    "docs"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22.19.0"
@@ -40,10 +39,13 @@
     "harness",
     "claude-code",
     "cli",
-    "setup"
+    "setup",
+    "openclaw",
+    "hermes"
   ],
   "dependencies": {
     "cross-spawn": "7.0.6",
+    "json5": "2.2.3",
     "yaml": "2.8.1"
   }
 }

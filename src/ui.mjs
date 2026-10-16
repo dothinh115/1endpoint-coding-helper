@@ -24,7 +24,7 @@ const clean = text => String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
 /** Arrow-key menu. No typed answers are accepted. */
 export async function select({ message, choices, input = process.stdin, output = process.stdout, language = 'en' }) {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') {
-    throw new Error('Non-interactive setup needs setup --tool dsh|claude --model PUBLIC_MODEL.')
+    throw new Error('Non-interactive setup needs setup --tool dsh|claude|openclaw|hermes --model PUBLIC_MODEL.')
   }
   if (!Array.isArray(choices) || !choices.length || choices.some(choice => !choice || typeof choice.label !== 'string')) {
     throw new Error('Selection requires labeled choices.')
@@ -314,7 +314,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       const pickModel = async label => manual
         ? modelQuestion(input, output, language)
         : choose(t(`Select public model for ${label}`, `Chọn mô hình công khai cho ${label}`), models.map(model => ({ label: model.name || model.id, value: model.id, description: model.name && model.name !== model.id ? model.id : undefined })))
-      if (tool === 'dsh') argv.push('--model', await pickModel(toolName))
+      if (tool !== 'claude') argv.push('--model', await pickModel(toolName))
       else {
         const roles = claudeAdapter.CLAUDE_ROLES
         const optionalRoles = claudeAdapter.CLAUDE_OPTIONAL_ROLES || []
@@ -362,7 +362,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
     }
     const result = await dispatch(argv, context)
     if (action === 'setup' || action === 'reconfigure') {
-      output.write(t(`Restart your ${toolName} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`, `Khởi động lại phiên ${toolName} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`))
+      output.write(t(`Restart your ${toolName} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command}.\n`, `Khởi động lại phiên ${toolName} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command}.\n`))
     }
     return result
   } catch (error) {

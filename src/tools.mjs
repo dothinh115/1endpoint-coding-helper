@@ -3,7 +3,9 @@ import fs from 'node:fs/promises'
 
 export const TOOL_INFO = {
   dsh: { name: 'DeepSeek Harness (DSH)', command: 'dsh', installUrl: 'https://github.com/deepseek-ai/deepseek-harness' },
-  claude: { name: 'Claude Code', command: 'claude', installUrl: 'https://code.claude.com/docs/en/overview' }
+  claude: { name: 'Claude Code', command: 'claude', installUrl: 'https://code.claude.com/docs/en/overview' },
+  openclaw: { name: 'OpenClaw', command: 'openclaw', installUrl: 'https://docs.openclaw.ai/start/getting-started' },
+  hermes: { name: 'Hermes', command: 'hermes', installUrl: 'https://hermes-agent.nousresearch.com/docs/getting-started/installation' }
 }
 
 export async function findExecutable(command, env = process.env) {
