@@ -2,8 +2,9 @@ import { createInterface } from 'node:readline/promises'
 import { fetchModels } from './catalog.mjs'
 import { openConsole } from './browser.mjs'
 import * as claudeAdapter from './adapters/claude.mjs'
+import { findExecutable, TOOL_INFO, missingToolMessage } from './tools.mjs'
 
-const palette = { heading: 36, info: 34, success: 32, warning: 33, error: 31, muted: 90, selected: 35 }
+const palette = { selected: 36, warning: 33, error: 31 }
 
 /** Semantic colors; NO_COLOR wins and FORCE_COLOR=0 disables colors. */
 export function colorize(text, kind, { output = process.stdout, env = process.env } = {}) {
@@ -74,6 +75,7 @@ export async function select({ message, choices, input = process.stdin, output =
       const footer = wrap(`${index + 1}/${choices.length} · ${hint}`)
       let candidates = choices.slice(start, start + pageSize).map((choice, offset) => ({
         i: start + offset,
+        kind: ['warning', 'error'].includes(choice.kind) ? choice.kind : undefined,
         lines: wrap(`${start + offset === index ? '❯' : ' '} ${choice.label}${choice.description ? ` — ${choice.description}` : ''}`)
       }))
       const budget = Math.max(1, (output.rows || 24) - rows.length - footer.length - 1)
@@ -81,7 +83,7 @@ export async function select({ message, choices, input = process.stdin, output =
         if (candidates[0].i < index) candidates.shift()
         else candidates.pop()
       }
-      for (const candidate of candidates) for (const text of candidate.lines) rows.push({ text, kind: candidate.i === index ? 'selected' : 'info' })
+      for (const candidate of candidates) for (const text of candidate.lines) rows.push({ text, kind: candidate.kind || (candidate.i === index ? 'selected' : undefined) })
       for (const text of footer) rows.push({ text, kind: 'muted' })
       for (const { text, kind } of rows) output.write('\u001b[2K' + colorize(text, kind, { output }) + '\n')
       renderedLines = rows.length
@@ -230,7 +232,7 @@ async function modelQuestion(input, output, language = 'en') {
 }
 
 /** Gather CLI arguments only. State and tool execution belong to dispatch. */
-export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), openConsole: openBrowser = openConsole }) {
+export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), isToolInstalled = async tool => Boolean(await findExecutable(TOOL_INFO[tool].command)), openConsole: openBrowser = openConsole }) {
   if (typeof dispatch !== 'function') throw new Error('Wizard requires a CLI dispatcher.')
   let language = 'en'
   const t = (en, vi) => language === 'vi' ? vi : en
@@ -243,7 +245,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
     language = await choose('Language / Ngôn ngữ', [
       { label: 'English', value: 'en' }, { label: 'Tiếng Việt', value: 'vi' }
     ])
-    const action = await choose(t('1endpoint coding-helper · isolated configuration', '1endpoint coding-helper · cấu hình riêng'), [
+    const action = await choose(t('1endpoint coding-helper · native user configuration', '1endpoint coding-helper · cấu hình người dùng của công cụ'), [
       { label: t('Setup', 'Cấu hình'), value: 'setup' },
       { label: t('Reconfigure', 'Cấu hình lại'), value: 'reconfigure' },
       { label: t('Remove', 'Xóa cấu hình'), value: 'remove' },
@@ -252,9 +254,12 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       { label: t('Exit', 'Thoát'), value: 'exit' }
     ])
     if (action === 'exit') return
-    const tool = await choose(t('Choose coding tool', 'Chọn công cụ lập trình'), [
-      { label: 'DSH', value: 'dsh' }, { label: 'Claude Code', value: 'claude' }
-    ])
+    const tool = await choose(t('Choose coding tool', 'Chọn công cụ lập trình'), Object.entries(TOOL_INFO).map(([value, info]) => ({ label: info.name, value })))
+    const toolName = TOOL_INFO[tool].name
+    if (['setup', 'reconfigure', 'run'].includes(action) && !await isToolInstalled(tool)) {
+      output.write(colorize(missingToolMessage(tool, language), 'warning', { output }) + '\n')
+      return
+    }
     const argv = [action, '--tool', tool]
     const context = { language }
     if (['setup', 'reconfigure', 'run'].includes(action)) {
@@ -309,7 +314,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       const pickModel = async label => manual
         ? modelQuestion(input, output, language)
         : choose(t(`Select public model for ${label}`, `Chọn mô hình công khai cho ${label}`), models.map(model => ({ label: model.name || model.id, value: model.id, description: model.name && model.name !== model.id ? model.id : undefined })))
-      if (tool === 'dsh') argv.push('--model', await pickModel('DSH'))
+      if (tool === 'dsh') argv.push('--model', await pickModel(toolName))
       else {
         const roles = claudeAdapter.CLAUDE_ROLES
         const optionalRoles = claudeAdapter.CLAUDE_OPTIONAL_ROLES || []
@@ -329,11 +334,11 @@ export async function wizard({ dispatch, input = process.stdin, output = process
         }
         argv.push('--model', selected.sonnet)
       }
-      if (tool === 'claude') output.write(colorize(t('Your permissions, hooks and project settings are preserved. Project overrides and managed policies may take priority.\n', 'Giữ nguyên quyền, hook và cài đặt dự án. Cấu hình dự án và chính sách quản trị có thể được ưu tiên.\n'), 'warning', { output }))
-      if (!await confirm(t(`${action === 'setup' ? 'Apply' : 'Update'} ${tool} user configuration? Unrelated settings are preserved.`, `${action === 'setup' ? 'Áp dụng' : 'Cập nhật'} cấu hình ${tool}? Giữ nguyên cài đặt không liên quan.`))) return
+      if (tool === 'claude') output.write(t('Your permissions, hooks and project settings are preserved. Project overrides and managed policies may take priority.\n', 'Giữ nguyên quyền, hook và cài đặt dự án. Cấu hình dự án và chính sách quản trị có thể được ưu tiên.\n'))
+      if (!await confirm(t(`${action === 'setup' ? 'Apply' : 'Update'} ${toolName} user configuration? Unrelated settings are preserved.`, `${action === 'setup' ? 'Áp dụng' : 'Cập nhật'} cấu hình ${toolName}? Giữ nguyên cài đặt không liên quan.`))) return
     }
     if (action === 'run' && tool === 'dsh') {
-      const profile = await choose(t('Choose DSH launch profile', 'Chọn chế độ khởi chạy DSH'), [
+      const profile = await choose(t(`Choose ${toolName} launch profile`, `Chọn chế độ khởi chạy ${toolName}`), [
         { label: t('Default (web)', 'Mặc định (web)'), value: null },
         ...['web', 'headless', 'acp', 'sdk'].map(value => ({ label: value, value }))
       ])
@@ -343,13 +348,13 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       const mode = await choose(t('Remove helper configuration', 'Xóa cấu hình riêng'), [
         { label: t('Cancel', 'Hủy'), value: 'cancel' },
         { label: t('Normal removal', 'Xóa thông thường'), value: 'normal', description: t('Validate ownership and integrity', 'Kiểm tra quyền sở hữu và tính toàn vẹn') },
-        { label: t('Force removal recovery', 'Khôi phục bằng xóa cưỡng chế'), value: 'force', description: t('Restore managed fields even if they were edited', 'Khôi phục các trường đã quản lý kể cả khi đã được sửa') }
+        { label: t('Force removal recovery', 'Khôi phục bằng xóa cưỡng chế'), value: 'force', kind: 'error', description: t('Restore managed fields even if they were edited', 'Khôi phục các trường đã quản lý kể cả khi đã được sửa') }
       ])
       if (mode === 'cancel') return
       if (mode === 'force') output.write(colorize(t('WARNING: Force recovery replaces managed model/authentication fields with their saved previous values. Other preferences are preserved.\n', 'CẢNH BÁO: khôi phục cưỡng chế thay các trường model/xác thực đã quản lý bằng giá trị trước đó. Giữ nguyên tùy chọn khác.\n'), 'warning', { output }))
       context.removeKey = await choose(t('Saved key for this tool', 'Khóa đã lưu cho công cụ này'), [
         { label: t('Keep saved key', 'Giữ khóa đã lưu'), value: false },
-        { label: t('Remove saved key too', 'Xóa cả khóa đã lưu'), value: true }
+        { label: t('Remove saved key too', 'Xóa cả khóa đã lưu'), value: true, kind: 'error' }
       ])
       if (!await confirm(mode === 'force' ? t('Restore previous managed settings?', 'Khôi phục các cài đặt đã quản lý trước đó?') : t('Confirm removal of helper-owned configuration?', 'Xác nhận xóa cấu hình riêng?'))) return
       argv.push('--yes')
@@ -357,14 +362,12 @@ export async function wizard({ dispatch, input = process.stdin, output = process
     }
     const result = await dispatch(argv, context)
     if (action === 'setup' || action === 'reconfigure') {
-      const warning = t(`Restart your ${tool === 'dsh' ? 'DSH' : 'Claude Code'} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`, `Khởi động lại phiên ${tool === 'dsh' ? 'DSH' : 'Claude Code'} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`)
-      const colored = colorize(warning, 'warning', { output })
-      output.write(colored === warning ? warning : `\u001b[1m${colored}\u001b[0m`)
+      output.write(t(`Restart your ${toolName} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`, `Khởi động lại phiên ${toolName} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : 'claude'}.\n`))
     }
     return result
   } catch (error) {
     if (error.code === 'UI_CANCELLED') {
-      output.write(colorize(t('Cancelled; no action taken.\n', 'Đã hủy; không thực hiện thao tác.\n'), 'warning', { output }))
+      output.write(t('Cancelled; no action taken.\n', 'Đã hủy; không thực hiện thao tác.\n'))
       return
     }
     throw error

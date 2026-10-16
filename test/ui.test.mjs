@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
-import { select, colorize, wizard, readApiKey } from '../src/ui.mjs'
+import { select, colorize, wizard as terminalWizard, readApiKey } from '../src/ui.mjs'
+
+const wizard = options => terminalWizard({ isToolInstalled: async () => true, ...options })
 
 function tty({ raw = false } = {}) {
   const input = new PassThrough()
@@ -90,8 +92,69 @@ test('NO_COLOR, FORCE_COLOR and TTY color policy', () => {
   assert.equal(colorize('heading', 'heading', { output: { isTTY: true }, env: { NO_COLOR: '', FORCE_COLOR: '1' } }), 'heading')
   assert.equal(colorize('plain', 'warning', { output: { isTTY: true }, env: { FORCE_COLOR: '0' } }), 'plain')
   assert.equal(colorize('plain', 'error', { output: { isTTY: false }, env: {} }), 'plain')
-  assert.match(colorize('forced', 'success', { output: { isTTY: false }, env: { FORCE_COLOR: '1' } }), /^\u001b\[32mforced\u001b\[0m$/)
-  assert.match(colorize('tty', 'heading', { output: { isTTY: true }, env: {} }), /^\u001b\[36m/)
+  assert.match(colorize('forced', 'warning', { output: { isTTY: false }, env: { FORCE_COLOR: '1' } }), /^\u001b\[33mforced\u001b\[0m$/)
+  assert.match(colorize('tty', 'selected', { output: { isTTY: true }, env: {} }), /^\u001b\[36mtty\u001b\[0m$/)
+  for (const kind of ['heading', 'info', 'success', 'muted']) assert.equal(colorize('ordinary', kind, { output: { isTTY: true }, env: { FORCE_COLOR: '1' } }), 'ordinary')
+})
+
+function forceColors(t) {
+  const previous = { FORCE_COLOR: process.env.FORCE_COLOR, NO_COLOR: process.env.NO_COLOR }
+  process.env.FORCE_COLOR = '1'
+  delete process.env.NO_COLOR
+  t.after(() => {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  })
+}
+const coloredSpans = text => [...text.matchAll(/\u001b\[(3[0-7]|9[0-7])m([^\u001b]*)\u001b\[0m/g)].map(([, code, text]) => ({ code, text }))
+
+test('menu only colors the current choice, not headings, ordinary options or hints', async t => {
+  forceColors(t)
+  const { input, output, text } = tty()
+  const pending = select({ message: 'Choose action', choices, input, output })
+  input.write('\r')
+  assert.equal(await pending, false)
+  assert.deepEqual(coloredSpans(text()), [{ code: '36', text: '❯ Cancel' }])
+  assert.match(text(), /\u001b\[2KChoose action\n/)
+  assert.match(text(), /\u001b\[2K  Confirm — Writes configuration\n/)
+  assert.match(text(), /\u001b\[2K1\/2 · ↑\/↓ select · Enter accept · Esc cancel\n/)
+  cleanListeners(input, output)
+})
+
+test('exceptional choices retain their warning or destructive color when selected', async t => {
+  forceColors(t)
+  const { input, output, text } = tty()
+  const pending = select({ message: 'Recovery', choices: [
+    { label: 'Cancel', value: false },
+    { label: 'Review overrides', value: 'review', kind: 'warning' },
+    { label: 'Force recovery', value: 'force', kind: 'error' }
+  ], input, output })
+  input.write('\u001b[A\r')
+  assert.equal(await pending, 'force')
+  assert.deepEqual(coloredSpans(text()), [
+    { code: '36', text: '❯ Cancel' },
+    { code: '33', text: '  Review overrides' },
+    { code: '31', text: '  Force recovery' },
+    { code: '33', text: '  Review overrides' },
+    { code: '31', text: '❯ Force recovery' }
+  ])
+  cleanListeners(input, output)
+})
+
+test('NO_COLOR menus preserve selection and risk labels without color', async t => {
+  forceColors(t)
+  process.env.NO_COLOR = ''
+  const { input, output, text } = tty()
+  const pending = select({ message: 'Recovery', choices: [
+    { label: 'Cancel', value: false }, { label: 'Force recovery', value: 'force', kind: 'error' }
+  ], input, output })
+  input.write('\u001b[A\r')
+  assert.equal(await pending, 'force')
+  assert.deepEqual(coloredSpans(text()), [])
+  assert.match(text(), /❯ Force recovery/)
+  cleanListeners(input, output)
 })
 
 async function keys(input, ...steps) {
@@ -108,6 +171,49 @@ test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async ()
   assert.doesNotMatch(text(), /yes\/no|y\/n/i)
 })
 
+for (const tool of ['dsh', 'claude']) for (const action of ['setup', 'reconfigure', 'run']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
+  const { input, output, text } = tty()
+  const checked = [], calls = []
+  let keyChecks = 0, catalogLoads = 0
+  const pending = wizard({ input, output, isToolInstalled: async selected => { checked.push(selected); return false },
+    getKeyStatus: async () => { keyChecks++; return { available: true } },
+    loadModels: async () => { catalogLoads++; return [{ id: 'model' }] }, dispatch: argv => calls.push(argv) })
+  const actionKeys = action === 'setup' ? '\r' : action === 'reconfigure' ? '\u001b[B\r' : '\u001b[A\u001b[A\r'
+  await keys(input, '\r', actionKeys, tool === 'dsh' ? '\r' : '\u001b[B\r')
+  if (!checked.length) input.write('\u0003')
+  await pending
+  assert.deepEqual(checked, [tool])
+  assert.deepEqual(calls, [])
+  assert.equal(keyChecks, 0)
+  assert.equal(catalogLoads, 0)
+  assert.match(text(), tool === 'dsh' ? /DeepSeek Harness \(DSH\) is not installed or "dsh" is not on PATH/ : /Claude Code is not installed or "claude" is not on PATH/)
+  assert.match(text(), /Install it first, then reopen your terminal/)
+  assert.ok(text().includes(tool === 'dsh' ? 'https://github.com/deepseek-ai/deepseek-harness' : 'https://code.claude.com/docs/en/overview'))
+  assert.doesNotMatch(text(), /Paste API key|Loading public|Select public model/)
+  cleanListeners(input, output)
+})
+
+test('missing-tool guidance is localized in Vietnamese', async () => {
+  const { input, output, text } = tty()
+  let checked = false
+  const pending = wizard({ input, output, isToolInstalled: async () => { checked = true; return false }, dispatch: () => assert.fail('must not dispatch') })
+  await keys(input, '\u001b[B\r', '\r', '\r')
+  if (!checked) input.write('\u0003')
+  await pending
+  assert.match(text(), /Chưa cài DeepSeek Harness \(DSH\) hoặc không tìm thấy lệnh "dsh" trên PATH/)
+  assert.match(text(), /Cài đặt công cụ trước, sau đó mở lại terminal/)
+})
+
+for (const action of ['doctor', 'remove']) test(`${action} remains available without an installed CLI`, async () => {
+  const { input, output } = tty()
+  const calls = []
+  const pending = wizard({ input, output, isToolInstalled: async () => assert.fail('cleanup and diagnostics do not require installation'), dispatch: argv => calls.push(argv) })
+  await keys(input, '\r', action === 'doctor' ? '\u001b[B\u001b[B\u001b[B\r' : '\u001b[B\u001b[B\r', '\r')
+  if (action === 'remove') await keys(input, '\u001b[B\r', '\r', '\u001b[B\r')
+  await pending
+  assert.deepEqual(calls, [[action, '--tool', 'dsh', ...(action === 'remove' ? ['--yes'] : [])]])
+})
+
 test('wizard setup free text is only model, Cancel is default confirmation', async () => {
   const { input, output, text } = tty()
   const calls = []
@@ -115,7 +221,10 @@ test('wizard setup free text is only model, Cancel is default confirmation', asy
   await keys(input, '\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\r')
   await pending
   assert.deepEqual(calls, [])
-  assert.match(text(), /Select public model for DSH/)
+  assert.match(text(), /Select public model for DeepSeek Harness \(DSH\)/)
+  assert.match(text(), /❯ DeepSeek Harness \(DSH\)/)
+  assert.match(text(), /coding-helper · native user configuration/)
+  assert.doesNotMatch(text(), /isolated configuration|❯ DSH/)
   assert.doesNotMatch(text(), /yes\/no|y\/n/i)
 })
 
@@ -129,7 +238,7 @@ test('wizard reconfigure confirms independent tiers and discloses Claude safety'
   assert.match(text(), /permissions, hooks and project settings are preserved/)
   assert.match(text(), /Project overrides and managed policies may take priority/)
   assert.match(text(), /Restart your Claude Code session/)
-  assert.ok(text().indexOf('Your permissions, hooks') < text().indexOf('Update claude user configuration'))
+  assert.ok(text().indexOf('Your permissions, hooks') < text().indexOf('Update Claude Code user configuration'))
 })
 
 test('wizard DSH run offers optional profiles', async () => {
@@ -150,7 +259,8 @@ test('wizard removal defaults to cancel and never dispatches', async () => {
   assert.deepEqual(calls, [])
 })
 
-test('wizard force recovery warns and requires explicit confirmation', async () => {
+test('wizard force recovery warns and requires explicit confirmation', async t => {
+  forceColors(t)
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
@@ -158,6 +268,8 @@ test('wizard force recovery warns and requires explicit confirmation', async () 
   await pending
   assert.deepEqual(calls, [['remove', '--tool', 'dsh', '--yes', '--force']])
   assert.match(text(), /WARNING:.*saved previous values/)
+  assert.ok(coloredSpans(text()).some(span => span.code === '31' && span.text.startsWith('❯ Force removal recovery')))
+  assert.ok(coloredSpans(text()).some(span => span.code === '31' && span.text.startsWith('  Remove saved key too')))
 })
 
 test('wizard Escape safely cancels and Exit does not dispatch', async () => {
@@ -194,9 +306,9 @@ test('language is first and Vietnamese setup confirmation/restart stay localized
   await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'public-model'], context: { language: 'vi' } }])
-  assert.match(text(), /Áp dụng cấu hình dsh/)
-  assert.match(text(), /Khởi động lại phiên DSH/)
-  const localized = text().slice(text().indexOf('Áp dụng cấu hình dsh'))
+  assert.match(text(), /Áp dụng cấu hình DeepSeek Harness \(DSH\)/)
+  assert.match(text(), /Khởi động lại phiên DeepSeek Harness \(DSH\)/)
+  const localized = text().slice(text().indexOf('Áp dụng cấu hình DeepSeek Harness (DSH)'))
   assert.doesNotMatch(localized, /Confirm|Loading public|Restart your|Choose coding/)
 })
 

@@ -1,6 +1,6 @@
 # @1endpoint/coding-helper
 
-Connect **DeepSeek Harness** or **Claude Code** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
+Connect **DeepSeek Harness (DSH)** or **Claude Code** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
 
 ## Before you start
 
@@ -18,12 +18,14 @@ npx @1endpoint/coding-helper
 
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
-3. Select **DSH** or **Claude Code**.
+3. Select **DeepSeek Harness (DSH)** or **Claude Code**. Before Setup, Reconfigure or Run continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
 4. Paste your key into the **masked API-key prompt**, or select **Open Console** and press Enter to create one first. If a saved key is available, choose **Use an existing key** to reuse it.
 5. Select models from the 1endpoint catalog.
 6. Review the selection, then choose **Confirm**. The key is saved automatically and the tool's native user configuration is updated.
 
 Use **↑ / ↓** to move and **Enter** to select. Press **Escape** to cancel. Confirmation is a selection, not a typed `y/n` answer.
+
+Most text uses your terminal's default color. Cyan marks the current choice, yellow marks warnings, and red marks errors or exceptional destructive choices such as force recovery and deleting a saved key. The `❯` marker and explicit labels also work without color. Set `NO_COLOR` or `FORCE_COLOR=0` to disable colors.
 
 **Open Console** opens [API keys](https://console.1endpoint.dev/api-keys), or the [Vietnamese API-key page](https://console.1endpoint.dev/vi/api-keys) when Vietnamese is selected. Create a key, copy it, return to the terminal and paste it into the prompt.
 
@@ -91,7 +93,7 @@ npx @1endpoint/coding-helper doctor --tool dsh
 npx @1endpoint/coding-helper doctor --tool claude
 ```
 
-Run the command for your selected tool. Doctor checks native setup, whether the executable is installed, key availability and detectable overrides/drift. It does not validate your key against the server or make an inference request. Review its warnings rather than deleting existing configuration blindly.
+Run the command for your selected tool. Doctor and Remove remain available even after uninstalling the native tool. Doctor checks native setup, whether the executable is installed, key availability and detectable overrides/drift. It does not validate your key against the server or make an inference request. Review its warnings rather than deleting existing configuration blindly.
 
 ## Change models or migrate an older setup
 

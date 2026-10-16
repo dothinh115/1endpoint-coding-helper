@@ -1,6 +1,6 @@
 {
   "name": "@1endpoint/coding-helper",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Native 1endpoint setup for DeepSeek Harness and Claude Code CLI",
   "type": "module",
   "bin": {

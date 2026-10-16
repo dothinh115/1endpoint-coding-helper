@@ -52,7 +52,10 @@ function run(command, args, options = {}) {
 async function cliEnv(root) {
   const home = path.join(root, 'actual-home')
   await fs.mkdir(home, { recursive: true })
-  return { PATH: path.dirname(process.execPath), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), CLAUDE_CONFIG_DIR: path.join(root, 'native-claude'), DSH_HOME: path.join(root, 'native-dsh'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
+  const bin = path.join(root, 'installed-bin')
+  await fs.mkdir(bin)
+  for (const tool of ['dsh', 'claude']) await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\nprocess.exit(0)\n`, { mode: 0o700 })
+  return { PATH: bin, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), CLAUDE_CONFIG_DIR: path.join(root, 'native-claude'), DSH_HOME: path.join(root, 'native-dsh'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
 }
 
 test('model validation accepts public IDs and refuses injection or ambiguous IDs', () => {
@@ -288,6 +291,26 @@ test('child environment removes alternate auth/routing, inherited homes and runt
     else { assert.equal(env.CLAUDE_CONFIG_DIR, undefined); assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined) }
   }
   assert.equal(source.ANTHROPIC_API_KEY, 'old')
+})
+
+for (const tool of ['dsh', 'claude']) test(`${tool}: missing CLI rejects setup/reconfigure/run before reading or writing user state`, async t => {
+  const root = await fixture(t), env = await cliEnv(root)
+  const bin = path.join(root, 'empty-bin')
+  await fs.mkdir(bin)
+  env.PATH = bin
+  const before = await snapshot(root)
+  for (const args of [['setup', '--model', 'public-model'], ['reconfigure', '--model', 'public-model'], ['run']]) {
+    const result = await run(process.execPath, [cli, ...args, '--tool', tool], { env })
+    assert.equal(result.code, 1)
+    assert.match(result.stderr, /is not installed or/)
+    assert.match(result.stderr, /Install it first/)
+    assert.ok(result.stderr.includes(tool === 'dsh' ? 'DeepSeek Harness (DSH)' : 'Claude Code'))
+    assert.ok(result.stderr.includes(tool === 'dsh' ? 'https://github.com/deepseek-ai/deepseek-harness' : 'https://code.claude.com/docs/en/overview'))
+    assert.ok(!result.stderr.includes(secret))
+    assert.deepEqual(await snapshot(root), before)
+  }
+  const removal = await run(process.execPath, [cli, 'remove', '--tool', tool, '--yes'], { env })
+  assert.equal(removal.code, 0, removal.stderr)
 })
 
 test('CLI help/version and noninteractive errors do not expose supplied values or create state', async t => {

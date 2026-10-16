@@ -11,6 +11,7 @@ import { getCredential, saveCredential, removeCredential } from './credentials.m
 import { applyClaude, removeClaude, inspectClaude } from './native/claude.mjs'
 import { applyDsh, removeDsh, inspectDsh } from './native/dsh.mjs'
 import { nativeWarnings } from './native/diagnostics.mjs'
+import { findExecutable, TOOL_INFO, missingToolMessage } from './tools.mjs'
 
 const HELP = `@1endpoint/coding-helper — native 1endpoint coding-tool setup
 
@@ -23,7 +24,8 @@ Usage:
   coding-helper backup --tool dsh|claude
   coding-helper --help | --version
 
-No arguments starts English/Tiếng Việt selection, then colored arrow-key action menus.
+No arguments starts English/Tiếng Việt selection, then arrow-key action menus.
+Tools: DeepSeek Harness (DSH), Claude Code. Color marks selection, warnings and errors only.
 Wizard fetches public 1endpoint text models for independent tool/tier selections.
 Claude setup/reconfigure accepts --haiku-model ID --sonnet-model ID --opus-model ID
 and optional --fable-model ID for supporting versions. --model is the main/default fallback.
@@ -32,7 +34,7 @@ Paste your API key privately in the menu, or press Enter on Open Console to crea
 Pasted keys are saved automatically for the selected tool. Saved files are private plaintext, not encrypted.
 ONEENDPOINT_API_KEY remains an optional environment override; never pass keys as arguments.
 State: ONEENDPOINT_HELPER_HOME or ~/.1endpoint/coding-helper (recovery and connection metadata).
-Setup updates native Claude/DSH user settings while preserving unrelated preferences.
+Setup updates native tool user settings while preserving unrelated preferences.
 Restart, then run claude or dsh web directly. Custom CLAUDE_CONFIG_DIR/DSH_HOME are respected.
 Project/local settings and managed policies can override user settings; they are not rewritten.
 Setup/doctor make no inference requests. Private recovery records may contain previous credentials.
@@ -59,17 +61,6 @@ function parse(argv) {
   if (options['--profile'] && !['web', 'headless', 'acp', 'sdk'].includes(options['--profile'])) throw new Error('Choose --profile web, headless, acp or sdk.')
   return { command, options, forwarded }
 }
-async function executable(command, env) {
-  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
-  for (const directory of (env.PATH || '').split(path.delimiter)) {
-    if (!directory) continue
-    for (const suffix of extensions) {
-      const file = path.resolve(directory, command + suffix)
-      try { const stat = await fs.stat(file); if (stat.isFile()) { await fs.access(file, process.platform === 'win32' ? 0 : 1); return file } } catch {}
-    }
-  }
-  return null
-}
 async function main(argv, context = {}) {
   if (!argv.length) return wizard({ dispatch: main, getKeyStatus: async ({ tool }) => {
     const credential = await getCredential({ stateDir: stateRoot(), tool })
@@ -83,6 +74,8 @@ async function main(argv, context = {}) {
   const { command, options, forwarded } = parse(argv)
   const t = (en, vi) => context.language === 'vi' ? vi : en
   const tool = options['--tool'], stateDir = stateRoot()
+  const bin = ['setup', 'reconfigure', 'run', 'doctor'].includes(command) ? await findExecutable(TOOL_INFO[tool].command) : null
+  if (['setup', 'reconfigure', 'run'].includes(command) && !bin) throw new Error(missingToolMessage(tool, context.language))
   if (command === 'remove') {
     if (!options['--yes'] && !options['--dry-run']) throw new Error(t('Confirm removal with --yes or preview with --dry-run.', 'Xác nhận xóa bằng --yes hoặc xem trước bằng --dry-run.'))
     // Validate both layers before changing either one; never trust paths from the legacy manifest.
@@ -125,13 +118,13 @@ async function main(argv, context = {}) {
       console.log(t('API key saved privately for this tool. Local storage is not encrypted.', 'Đã lưu khóa API riêng cho công cụ này. Tệp lưu cục bộ không được mã hóa.'))
     } else if (context.apiKey) console.log(t('API key is available for this session only.', 'Khóa API chỉ dùng trong phiên này.'))
     else console.log(t('Use the interactive menu to paste an API key, or provide ONEENDPOINT_API_KEY in your environment.', 'Mở menu để dán khóa API, hoặc cung cấp ONEENDPOINT_API_KEY qua môi trường.'))
-    if (!result.dryRun && !context.language) console.log(colorize('RESTART REQUIRED: close existing sessions, then run ' + (tool === 'claude' ? 'claude' : 'dsh web') + ' directly.', 'warning'))
+    if (!result.dryRun && !context.language) console.log('RESTART REQUIRED: close existing sessions, then run ' + (tool === 'claude' ? 'claude' : 'dsh web') + ' directly.')
     return
   }
   if (command === 'backup') { console.log('Secret-free configuration backup: ' + await backup({ stateDir, tool })); return }
-  const { state, plan } = await loadState(stateDir, tool)
+  if (command === 'doctor' && !bin) console.log(colorize(missingToolMessage(tool, context.language), 'warning'))
+  const { state } = await loadState(stateDir, tool)
   const credential = context.apiKey ? { key: context.apiKey, source: 'session' } : await getCredential({ stateDir, tool })
-  const bin = await executable(plan.command, process.env)
   if (command === 'doctor') {
     console.log(`${t('Configuration integrity: OK', 'Tính toàn vẹn cấu hình: OK')} (${tool})`)
     console.log(`${t('CLI installed', 'Đã cài CLI')}: ${bin ? t('yes', 'có') : t('no', 'chưa')}`)
@@ -143,7 +136,6 @@ async function main(argv, context = {}) {
     if (!bin || !credential.key || !native.configured || native.drift) process.exitCode = 1
     return
   }
-  if (!bin) throw new Error('CLI not found on PATH. Install the tool from its official distribution first.')
   const key = credential.key
   if (!key || /[\s\x00-\x1f\x7f-\x9f]/.test(key)) throw new Error(t('Add an API key through the interactive menu or set ONEENDPOINT_API_KEY.', 'Thêm khóa API qua menu hoặc đặt ONEENDPOINT_API_KEY.'))
   if (context.apiKey && context.saveKey) await saveCredential({ stateDir, tool, key })
