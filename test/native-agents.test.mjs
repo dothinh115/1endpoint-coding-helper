@@ -103,6 +103,16 @@ test('native home overrides are absolute and platform-aware', () => {
   for (const tool of ['openclaw', 'hermes']) assert.throws(() => resolveAgentPath({ tool, home: '/home/u', env: { OPENCLAW_STATE_DIR: 'relative', HERMES_HOME: 'relative' } }), /absolute/)
 })
 
+test('OpenClaw refuses implicit legacy-path shadowing', async t => {
+  const f = await fixture(t, 'openclaw')
+  const legacy = path.join(f.options.home, '.clawdbot', 'clawdbot.json')
+  await fs.mkdir(path.dirname(legacy), { recursive: true })
+  await fs.writeFile(legacy, '{"keep":"legacy"}')
+  await assert.rejects(applyAgent(f.options), /explicit OPENCLAW_CONFIG_PATH/)
+  assert.equal(await fs.readFile(legacy, 'utf8'), '{"keep":"legacy"}')
+  await assert.rejects(fs.stat(f.target), { code: 'ENOENT' })
+})
+
 test('OpenClaw JSON5 is supported and include directives fail closed', async t => {
   const f = await fixture(t, 'openclaw', "{ // comment\n tools: { profile: 'minimal', }, }")
   await applyAgent(f.options)

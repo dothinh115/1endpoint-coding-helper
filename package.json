@@ -1,6 +1,6 @@
 {
   "name": "@1endpoint/coding-helper",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Native 1endpoint setup for coding tools and agents",
   "type": "module",
   "bin": {
@@ -46,6 +46,7 @@
   "dependencies": {
     "cross-spawn": "7.0.6",
     "json5": "2.2.3",
+    "smol-toml": "1.9.1",
     "yaml": "2.8.1"
   }
 }

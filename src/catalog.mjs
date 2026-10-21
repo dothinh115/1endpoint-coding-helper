@@ -9,7 +9,14 @@ export function decodeModels(payload) {
     if (item.type && item.type !== 'text') continue
     if (item.modelType && item.modelType !== 'text') continue
     const name = typeof item.name === 'string' ? item.name : typeof item.display_name === 'string' ? item.display_name : item.id
-    models.set(item.id, { id: item.id, name: name.replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 200) })
+    const context = Number(item.context_window)
+    const vision = Boolean(item.vision && typeof item.vision === 'object' && item.vision.image === true)
+    models.set(item.id, {
+      id: item.id,
+      name: name.replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 200),
+      contextWindow: Number.isSafeInteger(context) && context > 0 ? context : null,
+      vision,
+    })
   }
   if (!models.size) throw new Error('No compatible text models were returned by the catalog.')
   return [...models.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))

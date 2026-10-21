@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createClaudePlan } from './adapters/claude.mjs'
 import { createDshPlan } from './adapters/dsh.mjs'
 import { createAgentPlan } from './adapters/agents.mjs'
+import { createCodexPlan, CODEX_ROUTES } from './adapters/codex.mjs'
 import { TOOL_INFO } from './tools.mjs'
 
 export const tools = Object.keys(TOOL_INFO)
@@ -19,12 +20,13 @@ export function validateModel(model) {
   if (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/.test(model)) throw new Error('Provide a public model ID using --model (letters, digits, dot, slash, colon, plus, underscore or hyphen).')
   return model
 }
-export function planFor({ stateDir, tool, model, roles }) {
+export function planFor({ stateDir, tool, model, roles, route }) {
   validateTool(tool); validateModel(model)
   if (roles !== undefined) {
     if (tool !== 'claude' || !roles || typeof roles !== 'object' || Array.isArray(roles) || Object.keys(roles).some(key => !['haiku', 'sonnet', 'opus', 'fable'].includes(key))) throw new Error('Invalid Claude model role mapping.')
     for (const value of Object.values(roles)) validateModel(value)
   }
+  if (tool === 'codex') return createCodexPlan({ stateDir, model, route: route || 'direct' })
   if (['openclaw', 'hermes'].includes(tool)) return createAgentPlan({ stateDir, tool, model })
   return (tool === 'dsh' ? createDshPlan : createClaudePlan)({ stateDir, model, roleModels: roles })
 }
@@ -56,8 +58,9 @@ export async function loadState(stateDir, tool) {
   if (raw === null) throw new Error('Tool is not configured. Run setup first.')
   let state
   try { state = JSON.parse(raw) } catch { throw new Error('Invalid helper manifest; refusing to change state.') }
-  if (!state || typeof state !== 'object' || Array.isArray(state) || !['files,model,tool', 'files,model,roles,tool'].includes(Object.keys(state).sort().join(',')) || state.tool !== tool || typeof state.model !== 'string' || !Array.isArray(state.files)) throw new Error('Invalid helper manifest.')
-  const plan = planFor({ stateDir, tool, model: state.model, roles: state.roles })
+  if (!state || typeof state !== 'object' || Array.isArray(state) || !['files,model,tool', 'files,model,roles,tool', 'files,model,route,tool'].includes(Object.keys(state).sort().join(',')) || state.tool !== tool || typeof state.model !== 'string' || !Array.isArray(state.files)) throw new Error('Invalid helper manifest.')
+  if (state.route !== undefined && (tool !== 'codex' || !CODEX_ROUTES.includes(state.route))) throw new Error('Invalid helper manifest.')
+  const plan = planFor({ stateDir, tool, model: state.model, roles: state.roles, route: state.route })
   if (JSON.stringify(state.files) !== JSON.stringify(plan.files.map(file => ({ path: file.path, hash: digest(file.content) })))) throw new Error('Helper manifest does not match the generated plan.')
   for (const file of plan.files) {
     await assertSafePath(file.path)
@@ -76,15 +79,15 @@ async function atomicWrite(file, content) {
     await fs.chmod(file, 0o600)
   } finally { await fs.unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error }) }
 }
-export async function setup({ stateDir, tool, model, roles, dryRun = false, update = false, autoBackup = false }) {
-  const plan = planFor({ stateDir, tool, model, roles })
+export async function setup({ stateDir, tool, model, roles, route, dryRun = false, update = false, autoBackup = false }) {
+  const plan = planFor({ stateDir, tool, model, roles, route })
   await assertSafePath(stateDir)
   const manifest = path.join(stateDir, `${tool}.json`)
   await assertSafePath(manifest)
   const existing = await optionalRead(manifest)
   if (existing !== null) {
     const loaded = await loadState(stateDir, tool)
-    if ((loaded.state.model !== model || JSON.stringify(loaded.state.roles) !== JSON.stringify(roles)) && !update) throw new Error('A different model is configured. Use --update after reviewing the change.')
+    if ((loaded.state.model !== model || JSON.stringify(loaded.state.roles) !== JSON.stringify(roles) || loaded.state.route !== (route || undefined)) && !update) throw new Error('A different model is configured. Use --update after reviewing the change.')
   } else {
     for (const file of plan.files) {
       await assertSafePath(file.path)
@@ -107,14 +110,15 @@ export async function setup({ stateDir, tool, model, roles, dryRun = false, upda
       if (existing === null && content !== null) throw new Error('Unmanaged file appeared during setup.')
       prior.push({ path: file.path, content })
     }
-    if (existing !== null && JSON.parse(existing).model === model && JSON.stringify(JSON.parse(existing).roles) === JSON.stringify(roles)) return { ...plan, changed: false }
+    const stored = existing === null ? null : JSON.parse(existing)
+    if (stored && stored.model === model && JSON.stringify(stored.roles) === JSON.stringify(roles) && stored.route === (route || undefined)) return { ...plan, changed: false }
     if (existing !== null && autoBackup) {
       const previous = await loadState(stateDir, tool)
-      await atomicWrite(path.join(stateDir, 'backups', `${tool}-${randomUUID()}.json`), JSON.stringify({ model: previous.state.model, ...(previous.state.roles ? { roles: previous.state.roles } : {}), tool, files: previous.plan.files }, null, 2) + '\n')
+      await atomicWrite(path.join(stateDir, 'backups', `${tool}-${randomUUID()}.json`), JSON.stringify({ model: previous.state.model, ...(previous.state.roles ? { roles: previous.state.roles } : {}), ...(previous.state.route ? { route: previous.state.route } : {}), tool, files: previous.plan.files }, null, 2) + '\n')
     }
     try {
       for (const file of plan.files) await atomicWrite(file.path, file.content)
-      const state = { tool, model, ...(roles ? { roles } : {}), files: plan.files.map(file => ({ path: file.path, hash: digest(file.content) })) }
+      const state = { tool, model, ...(roles ? { roles } : {}), ...(route ? { route } : {}), files: plan.files.map(file => ({ path: file.path, hash: digest(file.content) })) }
       await atomicWrite(manifest, JSON.stringify(state, null, 2) + '\n')
     } catch (error) {
       for (const file of prior.reverse()) {

@@ -90,6 +90,16 @@ async function load(options, readUnmanaged = true) {
   if (saved) validateJournal(saved, options.tool, target)
   if (!saved && !readUnmanaged) return { target, journal, journalBefore, saved }
   const targetBefore = await snapshot(target)
+  const env = options.env || process.env
+  if (options.tool === 'openclaw' && !env.OPENCLAW_CONFIG_PATH) {
+    const paths = (options.platform || process.platform) === 'win32' ? path.win32 : path.posix
+    const candidates = [paths.join(paths.dirname(target), 'clawdbot.json')]
+    if (!env.OPENCLAW_STATE_DIR) {
+      const effectiveHome = paths.dirname(paths.dirname(target))
+      candidates.push(paths.join(effectiveHome, '.clawdbot', 'openclaw.json'), paths.join(effectiveHome, '.clawdbot', 'clawdbot.json'))
+    }
+    for (const candidate of candidates) if ((await snapshot(candidate)).raw !== null) throw new Error('Legacy OpenClaw configuration detected. Set an explicit OPENCLAW_CONFIG_PATH to the active file before setup; no configuration was changed.')
+  }
   return { target, journal, journalBefore, saved, targetBefore, config: parse(targetBefore.raw, options.tool) }
 }
 const drift = data => data.saved.fields.some(field => !equal(get(data.config, field.path), field.applied))

@@ -10,10 +10,3 @@ export function createAgentPlan({ stateDir, tool, model }) {
     hints: ['Restart the tool after setup. Native permissions, workspace trust and tool policies remain in effect.']
   }
 }
-export function launchAgent({ args = [], ...options }) {
-  if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('Invalid tool arguments.')
-  if (args.some(arg => arg.startsWith('-') && !['--help', '-h', '--version', '-v'].includes(arg))) throw new Error('Agent routing and permission overrides are not supported by the helper launcher. Launch the configured tool directly for other options.')
-  if (options.tool === 'openclaw' && args.length) throw new Error('Use openclaw directly for commands other than the configured TUI.')
-  const plan = createAgentPlan(options)
-  return { ...plan, args: [...plan.args, ...args] }
-}

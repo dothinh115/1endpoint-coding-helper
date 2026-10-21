@@ -6,8 +6,12 @@ export async function nativeWarnings({ tool, env = process.env, cwd = process.cw
   const warnings = []
   const names = Object.keys(env).filter(name => tool === 'claude'
     ? /^(?:ANTHROPIC_(?:MODEL|DEFAULT_.*_MODEL|BASE_URL|AUTH_TOKEN|API_KEY|CUSTOM_HEADERS)|CLAUDE_CODE_(?:USE_.*|OAUTH_TOKEN|SUBAGENT_MODEL))$/.test(name)
-    : /^(?:ONEENDPOINT_API_KEY|ONEENDPOINT_HELPER_API_KEY)$/.test(name))
-  if (names.length) warnings.push(`Inherited routing/authentication variables are set (${names.join(', ')}). They may override native settings; review your shell environment if the selected model is not applied.`)
+    : tool === 'codex'
+      ? /^(?:OPENAI_BASE_URL|OPENAI_API_KEY|CODEX_API_KEY)$/.test(name)
+      : /^(?:ONEENDPOINT_API_KEY|ONEENDPOINT_HELPER_API_KEY)$/.test(name))
+  if (names.length) warnings.push(tool === 'codex'
+    ? `Inherited Codex overrides are set (${names.join(', ')}). They can outrank the configured provider; review your shell environment if the selected model is not applied.`
+    : `Inherited routing/authentication variables are set (${names.join(', ')}). They may override native settings; review your shell environment if the selected model is not applied.`)
   if (['openclaw', 'hermes'].includes(tool)) {
     const overrides = Object.keys(env).filter(name => tool === 'openclaw' ? /^(?:OPENCLAW_PROFILE|OPENCLAW_AGENT_DIR|PI_CODING_AGENT_DIR)$/.test(name) : /^(?:HERMES_INFERENCE_PROVIDER|OPENAI_BASE_URL|OPENAI_API_KEY|CUSTOM_BASE_URL|CUSTOM_API_KEY)$/.test(name))
     if (overrides.length) warnings.push(`Native agent overrides are set (${overrides.join(', ')}). Review the active profile if routing differs; values are not displayed.`)

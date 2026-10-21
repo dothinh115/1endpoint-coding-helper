@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve, join, dirname, isAbsolute, relative, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { createDshPlan, launchDsh } from '../src/adapters/dsh.mjs';
+import { createDshPlan } from '../src/adapters/dsh.mjs';
 
 const model = 'openai/gpt-5';
 
@@ -46,44 +46,19 @@ test('JSON-as-YAML round trips special model identifiers without injection', () 
   assert.equal(patches[1].config.model, special);
 });
 
-test('supported profiles preserve app arguments and do not mutate input', () => {
-  for (const profile of ['web', 'headless', 'acp', 'sdk']) {
-    const args = Object.freeze(['--resume', 'session-123', 'a prompt with spaces']);
-    const plan = launchDsh({ stateDir: './state', model, profile, args });
-    assert.equal(plan.args[1], profile);
-    assert.deepEqual(plan.args.slice(4), args);
-  }
-  for (const profile of ['sdk-minimal', 'tui', 'desktop', '../web', '', null]) {
-    assert.throws(() => launchDsh({ stateDir: './state', model, profile }), /Unsupported DSH profile/);
-  }
-});
 
-test('routing flags, equal forms, and commander abbreviations cannot override isolation', () => {
-  for (const flag of [
-    '--patch', '--profile', '--from-default-profile', '--dump-default-config',
-    '--config', '--config-file', '--home', '--dsh-home', '--provider', '--model',
-    '--api-key', '--api-key-env', '--base-url', '--baseURL',
-    '--pat', '--prof', '--from-default-prof',
-  ]) {
-    for (const arg of [flag, `${flag}=malicious`]) {
-      assert.throws(() => launchDsh({ stateDir: './state', model, args: ['--', arg] }), /routing override/);
-    }
-  }
-  for (const diagnostic of ['--dump-config', '--dump-config-schema']) {
-    assert.equal(launchDsh({ stateDir: './state', model, args: [diagnostic] }).args.at(-1), diagnostic);
-  }
-});
 
-test('invalid inputs fail before producing a launch plan', () => {
+test('invalid inputs fail before producing a configuration plan', () => {
   for (const stateDir of [undefined, '', '  ', 42, 'a\0b']) {
     assert.throws(() => createDshPlan({ stateDir, model }), /stateDir/);
   }
   for (const invalidModel of [undefined, '', '\t', 42, 'a\0b']) {
     assert.throws(() => createDshPlan({ stateDir: './state', model: invalidModel }), /model/);
   }
-  for (const args of ['--dump-config', [1], ['a\0b'], null]) {
-    assert.throws(() => launchDsh({ stateDir: './state', model, args }), /args/);
+  for (const profile of ['sdk-minimal', 'tui', 'desktop', '../web', '', null]) {
+    assert.throws(() => createDshPlan({ stateDir: './state', model, profile }), /Unsupported DSH profile/);
   }
+  assert.equal(createDshPlan({ stateDir: './state', model, profile: 'headless' }).args[1], 'headless');
 });
 
 const installedDsh = '/opt/homebrew/bin/dsh';
@@ -135,8 +110,8 @@ test('installed isolated DSH composes provider/default model and headless schema
   assert.deepEqual(defaultModel.config, patches[1].config);
   assert.equal(provider.name, patches[0].name);
   assert.equal(defaultModel.name, patches[1].name);
-  const schemaPlan = launchDsh({ stateDir: root, model: special, profile: 'headless', args: ['--dump-config-schema'] });
-  const schema = spawnSync(installedDsh, schemaPlan.args, {
+  const schemaPlan = createDshPlan({ stateDir: root, model: special, profile: 'headless' });
+  const schema = spawnSync(installedDsh, [...schemaPlan.args, '--dump-config-schema'], {
     env, encoding: 'utf8', timeout: 60_000, maxBuffer: 20 * 1024 * 1024,
   });
   assert.ifError(schema.error);

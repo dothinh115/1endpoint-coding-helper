@@ -4,7 +4,7 @@ import { PassThrough, Writable } from 'node:stream'
 import { TOOL_INFO } from '../src/tools.mjs'
 import { select, colorize, wizard as terminalWizard, readApiKey } from '../src/ui.mjs'
 
-const wizard = options => terminalWizard({ isToolInstalled: async () => true, ...options })
+const wizard = options => terminalWizard({ isToolInstalled: async () => true, isOpencodexInstalled: async () => true, ...options })
 
 function tty({ raw = false } = {}) {
   const input = new PassThrough()
@@ -161,33 +161,41 @@ test('NO_COLOR menus preserve selection and risk labels without color', async t 
 async function keys(input, ...steps) {
   for (const step of steps) { input.write(step); await tick() }
 }
+const ACTIONS = ['setup', 'reconfigure', 'remove', 'doctor', 'exit']
+const down = count => '\u001b[B'.repeat(count)
+const pickAction = action => down(ACTIONS.indexOf(action)) + '\r'
+const pickTool = tool => down(Object.keys(TOOL_INFO).indexOf(tool)) + '\r'
+// The key menu lists Paste, Open Console, Use existing, Skip, Cancel.
+const useExistingKey = down(2) + '\r'
+const MODELS = [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }]
 
 test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\u001b[B\u001b[B\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
+  await keys(input, '\r', pickAction('doctor'), pickTool('claude'))
   await pending
   assert.deepEqual(calls, [['doctor', '--tool', 'claude']])
   assert.doesNotMatch(text(), /yes\/no|y\/n/i)
 })
 
-for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'reconfigure', 'run']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
+for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'reconfigure']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
   const { input, output, text } = tty()
   const checked = [], calls = []
   let keyChecks = 0, catalogLoads = 0
   const pending = wizard({ input, output, isToolInstalled: async selected => { checked.push(selected); return false },
+    isOpencodexInstalled: async () => true,
     getKeyStatus: async () => { keyChecks++; return { available: true } },
     loadModels: async () => { catalogLoads++; return [{ id: 'model' }] }, dispatch: argv => calls.push(argv) })
-  const actionKeys = action === 'setup' ? '\r' : action === 'reconfigure' ? '\u001b[B\r' : '\u001b[A\u001b[A\r'
-  await keys(input, '\r', actionKeys, '\u001b[B'.repeat(Object.keys(TOOL_INFO).indexOf(tool)) + '\r')
+  // Codex asks for its route before the installation check.
+  await keys(input, '\r', pickAction(action), pickTool(tool), ...(tool === 'codex' ? ['\r'] : []))
   if (!checked.length) input.write('\u0003')
   await pending
   assert.deepEqual(checked, [tool])
   assert.deepEqual(calls, [])
   assert.equal(keyChecks, 0)
   assert.equal(catalogLoads, 0)
-  assert.ok(text().includes(`${TOOL_INFO[tool].name} is not installed or "${tool}" is not on PATH`))
+  assert.ok(text().includes(`${TOOL_INFO[tool].name} is not installed or "${TOOL_INFO[tool].command}" is not on PATH`))
   assert.match(text(), /Install it first, then reopen your terminal/)
   assert.ok(text().includes(TOOL_INFO[tool].installUrl))
   assert.doesNotMatch(text(), /Paste API key|Loading public|Select public model/)
@@ -198,7 +206,7 @@ test('missing-tool guidance is localized in Vietnamese', async () => {
   const { input, output, text } = tty()
   let checked = false
   const pending = wizard({ input, output, isToolInstalled: async () => { checked = true; return false }, dispatch: () => assert.fail('must not dispatch') })
-  await keys(input, '\u001b[B\r', '\r', '\r')
+  await keys(input, '\u001b[B\r', pickAction('setup'), pickTool('dsh'))
   if (!checked) input.write('\u0003')
   await pending
   assert.match(text(), /Chưa cài DeepSeek Harness \(DSH\) hoặc không tìm thấy lệnh "dsh" trên PATH/)
@@ -209,7 +217,7 @@ for (const action of ['doctor', 'remove']) test(`${action} remains available wit
   const { input, output } = tty()
   const calls = []
   const pending = wizard({ input, output, isToolInstalled: async () => assert.fail('cleanup and diagnostics do not require installation'), dispatch: argv => calls.push(argv) })
-  await keys(input, '\r', action === 'doctor' ? '\u001b[B\u001b[B\u001b[B\r' : '\u001b[B\u001b[B\r', '\r')
+  await keys(input, '\r', pickAction(action), pickTool('dsh'))
   if (action === 'remove') await keys(input, '\u001b[B\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [[action, '--tool', 'dsh', ...(action === 'remove' ? ['--yes'] : [])]])
@@ -218,8 +226,8 @@ for (const action of ['doctor', 'remove']) test(`${action} remains available wit
 test('wizard setup free text is only model, Cancel is default confirmation', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
+  await keys(input, '\r', pickAction('setup'), pickTool('dsh'), useExistingKey, '\r', '\r')
   await pending
   assert.deepEqual(calls, [])
   assert.match(text(), /Select public model for DeepSeek Harness \(DSH\)/)
@@ -232,30 +240,21 @@ test('wizard setup free text is only model, Cancel is default confirmation', asy
 test('wizard reconfigure confirms independent tiers and discloses Claude safety', async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[B\u001b[B\r', '\r', '\r', '\u001b[B\r', '\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
+  await keys(input, '\r', pickAction('reconfigure'), pickTool('claude'), useExistingKey, '\r', '\r', '\u001b[B\r', '\u001b[B\u001b[B\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['reconfigure', '--tool', 'claude', '--haiku-model', 'public-model', '--sonnet-model', 'second-model', '--opus-model', 'public-model', '--model', 'second-model']])
   assert.match(text(), /permissions, hooks and project settings are preserved/)
   assert.match(text(), /Project overrides and managed policies may take priority/)
-  assert.match(text(), /Restart your Claude Code session/)
+  assert.ok(text().includes('Restart your Claude Code session'))
   assert.ok(text().indexOf('Your permissions, hooks') < text().indexOf('Update Claude Code user configuration'))
-})
-
-test('wizard DSH run offers optional profiles', async () => {
-  const { input, output } = tty()
-  const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\u001b[B\u001b[B\r')
-  await pending
-  assert.deepEqual(calls, [['run', '--tool', 'dsh', '--profile', 'headless']])
 })
 
 test('wizard removal defaults to cancel and never dispatches', async () => {
   const { input, output } = tty()
   const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
+  await keys(input, '\r', pickAction('remove'), pickTool('dsh'), '\r', '\r')
   await pending
   assert.deepEqual(calls, [])
 })
@@ -264,8 +263,8 @@ test('wizard force recovery warns and requires explicit confirmation', async t =
   forceColors(t)
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
-  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[A\r', '\r', '\u001b[B\r')
+  const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
+  await keys(input, '\r', pickAction('remove'), pickTool('dsh'), '\u001b[A\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['remove', '--tool', 'dsh', '--yes', '--force']])
   assert.match(text(), /WARNING:.*saved previous values/)
@@ -277,7 +276,7 @@ test('wizard Escape safely cancels and Exit does not dispatch', async () => {
   for (const key of ['\u0003', '\u001b[A\r']) {
     const { input, output } = tty()
     const calls = []
-    const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }, { id: 'second-model', name: 'Second Model' }] })
+    const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => MODELS })
     if (key === '\u0003') input.write(key)
     else await keys(input, '\r', key)
     await pending
@@ -304,7 +303,7 @@ test('language is first and Vietnamese setup confirmation/restart stay localized
   const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: (argv, context) => calls.push({ argv, context }), input, output, loadModels: async () => [{ id: 'public-model', name: 'Public Model' }] })
   assert.match(text(), /Language \/ Ngôn ngữ/)
   assert.doesNotMatch(text(), /Setup|Cấu hình/)
-  await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
+  await keys(input, '\u001b[B\r', pickAction('setup'), pickTool('dsh'), useExistingKey, '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'public-model'], context: { language: 'vi' } }])
   assert.match(text(), /Áp dụng cấu hình DeepSeek Harness \(DSH\)/)
@@ -317,7 +316,7 @@ test('catalog failure has explicit manual recovery; free text only model ID', as
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ getKeyStatus: async () => ({ available: true }), dispatch: argv => calls.push(argv), input, output, loadModels: async () => { throw new Error('private detail') } })
-  await keys(input, '\r', '\r', '\r', '\u001b[B\u001b[B\r', '\u001b[A\r', 'manual-model\r', '\u001b[B\r')
+  await keys(input, '\r', pickAction('setup'), pickTool('dsh'), useExistingKey, '\u001b[B\u001b[B\r', 'manual-model\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['setup', '--tool', 'dsh', '--model', 'manual-model']])
   assert.match(text(), /Public model ID/)
@@ -385,7 +384,7 @@ test('setup default paste saves only through dispatch context after explicit con
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'model' }] })
-  await keys(input, '\r', '\r', '\r', '\r', '\u001b[200~sk-private-test\u001b[201~', '\r', '\r', '\u001b[B\r')
+  await keys(input, '\r', pickAction('setup'), pickTool('dsh'), '\r', '\u001b[200~sk-private-test\u001b[201~', '\r', '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'model'], context: { language: 'en', apiKey: 'sk-private-test', saveKey: true } }])
   assert.doesNotMatch(text(), /sk-private-test/)
@@ -397,7 +396,7 @@ test('cancel after paste leaves dispatcher and saved key untouched', async () =>
   const { input, output, text } = tty()
   let dispatched = false
   const pending = wizard({ input, output, dispatch: () => { dispatched = true }, loadModels: async () => [{ id: 'm' }] })
-  await keys(input, '\r', '\r', '\r', '\r', 'secret-cancel\r', '\r', '\r')
+  await keys(input, '\r', pickAction('setup'), pickTool('dsh'), '\r', 'secret-cancel\r', '\r', '\r')
   await pending
   assert.equal(dispatched, false)
   assert.doesNotMatch(text(), /secret-cancel|Use existing saved/)
@@ -408,7 +407,7 @@ test('explicit Vietnamese browser failure stays in key menu and can retry, never
   const opened = [], calls = []
   const pending = wizard({ input, output, openConsole: async options => { opened.push(options); if (opened.length === 1) throw new Error('private browser detail') }, dispatch: argv => calls.push(argv), loadModels: async () => [{ id: 'm' }] })
   assert.deepEqual(opened, [])
-  await keys(input, '\u001b[B\r', '\r', '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[A\r')
+  await keys(input, '\u001b[B\r', pickAction('setup'), pickTool('dsh'), '\u001b[B\r', '\u001b[B\r', down(3) + '\r')
   await pending
   assert.deepEqual(opened, [{ language: 'vi' }, { language: 'vi' }])
   assert.deepEqual(calls, [])
@@ -416,20 +415,11 @@ test('explicit Vietnamese browser failure stays in key menu and can retry, never
   assert.doesNotMatch(text(), /private browser detail/)
 })
 
-test('run without available key asks for key and forwards run-only context', async () => {
-  const { input, output } = tty()
-  const calls = []
-  const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }) })
-  await keys(input, '\r', '\u001b[A\u001b[A\r', '\r', '\r', 'run-secret\r', '\r')
-  await pending
-  assert.deepEqual(calls, [{ argv: ['run', '--tool', 'dsh'], context: { language: 'en', apiKey: 'run-secret', saveKey: true } }])
-})
-
 test('paste labels are simple and setup saves automatically without storage/session prompts', async () => {
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }), loadModels: async () => [{ id: 'm' }] })
-  await keys(input, '\u001b[B\r', '\r', '\r', '\r', 'saved-secret\r', '\r', '\u001b[B\r')
+  await keys(input, '\u001b[B\r', pickAction('setup'), pickTool('dsh'), '\r', 'saved-secret\r', '\r', '\u001b[B\r')
   await pending
   assert.equal(calls.length, 1)
   assert.equal(calls[0].context.saveKey, true)
@@ -442,7 +432,7 @@ test('removal explicitly chooses whether to remove the saved tool key', async ()
   const { input, output } = tty()
   const calls = []
   const pending = wizard({ input, output, dispatch: (argv, context) => calls.push({ argv, context }) })
-  await keys(input, '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r', '\u001b[B\r', '\u001b[B\r')
+  await keys(input, '\r', pickAction('remove'), pickTool('dsh'), '\u001b[B\r', '\u001b[B\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [{ argv: ['remove', '--tool', 'dsh', '--yes'], context: { language: 'en', removeKey: true } }])
 })
@@ -460,14 +450,49 @@ for (const columns of [80, 120]) test(`menu wraps full Vietnamese/model labels a
   cleanListeners(input, output)
 })
 
-for (const [tool, index] of [['openclaw', 2], ['hermes', 3]]) test(`${tool} wizard selects one model and dispatches native setup`, async () => {
+for (const tool of ['openclaw', 'hermes']) test(`${tool} wizard selects one model and dispatches native setup`, async () => {
   const { input, output, text } = tty()
   const calls = []
   const pending = wizard({ input, output, isToolInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'public-model' }], dispatch: argv => calls.push(argv) })
-  await keys(input, '\r', '\r', '\u001b[B'.repeat(index) + '\r', '\u001b[B\u001b[B\r', '\r', '\u001b[B\r')
+  await keys(input, '\r', pickAction('setup'), pickTool(tool), useExistingKey, '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['setup', '--tool', tool, '--model', 'public-model']])
   assert.doesNotMatch(text(), /Select the tiers/)
   assert.ok(text().includes(tool === 'openclaw' ? 'openclaw tui' : 'hermes'))
   cleanListeners(input, output)
+})
+
+test('Codex asks for a route, blocks an uninstalled OpenCodex, and forwards the whole catalog', async () => {
+  const { input, output, text } = tty()
+  const calls = []
+  const catalog = [{ id: 'first-model', name: 'First', contextWindow: 1000000, vision: true }, { id: 'second-model', name: 'Second', contextWindow: 500000, vision: false }]
+  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => false, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
+  await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\u001b[B\r')
+  await pending
+  assert.deepEqual(calls, [])
+  assert.match(text(), /OpenCodex is not installed or "ocx" is not on PATH/)
+  assert.match(text(), /npm install -g @bitkyc08\/opencodex/)
+})
+
+test('Codex direct setup selects one model and forwards every catalog model', async () => {
+  const { input, output } = tty()
+  const calls = []
+  const catalog = [{ id: 'first-model', name: 'First', contextWindow: 1000000, vision: true }, { id: 'second-model', name: 'Second', contextWindow: 500000, vision: false }]
+  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
+  await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\r', useExistingKey, '\u001b[B\r', '\u001b[B\r')
+  await pending
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].argv, ['setup', '--tool', 'codex', '--route', 'direct', '--model', 'second-model'])
+  assert.equal(calls[0].context.route, 'direct')
+  assert.deepEqual(calls[0].context.models, catalog)
+})
+
+test('Codex OpenCodex setup runs when the proxy is installed', async () => {
+  const { input, output } = tty()
+  const calls = []
+  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'model' }], dispatch: (argv, context) => calls.push({ argv, context }) })
+  await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\u001b[B\r', useExistingKey, '\r', '\u001b[B\r')
+  await pending
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].argv, ['setup', '--tool', 'codex', '--route', 'opencodex', '--model', 'model'])
 })

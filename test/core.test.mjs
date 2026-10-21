@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import http from 'node:http'
 import YAML from 'yaml'
 import { setup, reconfigure, remove, backup, loadState, stateRoot, planFor, validateModel, assertSafePath } from '../src/state.mjs'
-import { createClaudePlan, launchClaude, childEnvironment, MODEL_VARIABLES } from '../src/adapters/claude.mjs'
+import { createClaudePlan, MODEL_VARIABLES } from '../src/adapters/claude.mjs'
 import { parse } from '../src/cli.mjs'
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url))
@@ -241,18 +241,18 @@ test('CLI lifecycle commands confirm deletion and automatically back up model ch
   assert.equal(Object.keys(await snapshot(path.join(env.ONEENDPOINT_HELPER_HOME, 'backups'))).length, 1)
 })
 
-test('Claude distinct tier mappings survive setup, launch, reconfigure and backup', async t => {
+test('Claude distinct tier mappings survive setup, reconfigure and backup', async t => {
   const root = await fixture(t), stateDir = path.join(root, 'state'), tool = 'claude'
   const roles = { haiku: 'fast', sonnet: 'balanced', opus: 'strong', fable: 'future' }
   await setup({ stateDir, tool, model: 'balanced', roles })
   const loaded = await loadState(stateDir, tool)
   assert.deepEqual(loaded.state.roles, roles)
-  const env = launchClaude({ stateDir, model: loaded.state.model, roleModels: loaded.state.roles }).env
-  assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'fast')
-  assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'balanced')
-  assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'strong')
-  assert.equal(env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'future')
-  assert.equal(env.CLAUDE_CODE_SUBAGENT_MODEL, 'balanced')
+  const settings = JSON.parse(loaded.plan.files[0].content)
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'fast')
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'balanced')
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'strong')
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'future')
+  assert.equal(settings.env.CLAUDE_CODE_SUBAGENT_MODEL, 'balanced')
   assert.equal((await setup({ stateDir, tool, model: 'balanced', roles })).changed, false)
   const changedRoles = { ...roles, haiku: 'faster' }
   await assert.rejects(setup({ stateDir, tool, model: 'balanced', roles: changedRoles }), /--update/)
@@ -263,43 +263,22 @@ test('Claude distinct tier mappings survive setup, launch, reconfigure and backu
   assert.throws(() => planFor({ stateDir, tool: 'dsh', model: 'x', roles }))
 })
 
-test('Claude maps all model roles and rejects routing, plugins and permission bypass overrides', () => {
+test('Claude maps all model roles through the native settings file', () => {
   const plan = createClaudePlan({ stateDir: '/isolated', model: 'public-model' })
   const settings = JSON.parse(plan.files[0].content)
   for (const name of MODEL_VARIABLES) { assert.equal(settings.env[name], 'public-model'); assert.equal(plan.env[name], 'public-model') }
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://1endpoint.dev/api/v1')
   assert.equal(settings.model, 'public-model')
   assert.deepEqual(plan.args.slice(0, 2), ['--setting-sources', 'user'])
-  for (const flag of ['--settings', '--setting-sources', '--model', '-m', '-mother', '--fallback-model', '--agent', '--agents', '--plugin-dir', '--bare', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode']) {
-    assert.throws(() => launchClaude({ stateDir: '/isolated', model: 'x', args: [flag] }))
-    assert.throws(() => launchClaude({ stateDir: '/isolated', model: 'x', args: [`${flag}=anything`] }))
-  }
-  for (const args of [null, ['x\0y'], [12]]) assert.throws(() => launchClaude({ stateDir: '/isolated', model: 'x', args }))
-  const launched = launchClaude({ stateDir: '/isolated', model: 'x', args: ['-p', 'hello', '--output-format', 'json'] })
-  assert.deepEqual(launched.args.slice(-4), ['-p', 'hello', '--output-format', 'json'])
 })
 
-test('child environment removes alternate auth/routing, inherited homes and runtime injection', () => {
-  const source = { PATH: '/safe', HOME: '/actual', ANTHROPIC_API_KEY: 'old', ANTHROPIC_BASE_URL: 'evil', CLAUDE_CONFIG_DIR: '/actual/.claude', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_OAUTH_TOKEN: 'old', DSH_HOME: '/actual/.dsh', DSH_OTHER: 'x', NODE_OPTIONS: '--require evil', NODE_PATH: '/evil', BASH_ENV: '/evil', ENV: '/evil', LD_PRELOAD: '/evil', DYLD_INSERT_LIBRARIES: '/evil' }
-  for (const tool of ['claude', 'dsh']) {
-    const plan = planFor({ stateDir: '/isolated', tool, model: 'x' })
-    const env = childEnvironment(source, plan, secret)
-    assert.equal(env.HOME, '/actual'); assert.equal(env.PATH, '/safe')
-    for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_OAUTH_TOKEN', 'DSH_OTHER', 'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'ANTHROPIC_API_KEY']) assert.equal(env[name], undefined)
-    assert.equal(env.ONEENDPOINT_API_KEY, secret)
-    if (tool === 'claude') { assert.equal(env.ANTHROPIC_AUTH_TOKEN, secret); assert.equal(env.DSH_HOME, undefined) }
-    else { assert.equal(env.CLAUDE_CONFIG_DIR, undefined); assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined) }
-  }
-  assert.equal(source.ANTHROPIC_API_KEY, 'old')
-})
-
-for (const tool of ['dsh', 'claude']) test(`${tool}: missing CLI rejects setup/reconfigure/run before reading or writing user state`, async t => {
+for (const tool of ['dsh', 'claude']) test(`${tool}: missing CLI rejects setup/reconfigure before reading or writing user state`, async t => {
   const root = await fixture(t), env = await cliEnv(root)
   const bin = path.join(root, 'empty-bin')
   await fs.mkdir(bin)
   env.PATH = bin
   const before = await snapshot(root)
-  for (const args of [['setup', '--model', 'public-model'], ['reconfigure', '--model', 'public-model'], ['run']]) {
+  for (const args of [['setup', '--model', 'public-model'], ['reconfigure', '--model', 'public-model']]) {
     const result = await run(process.execPath, [cli, ...args, '--tool', tool], { env })
     assert.equal(result.code, 1)
     assert.match(result.stderr, /is not installed or/)
@@ -320,7 +299,7 @@ test('CLI help/version and noninteractive errors do not expose supplied values o
     assert.equal(result.code, 0, result.stderr)
     assert.ok(result.stdout.trim())
   }
-  for (const args of [[], ['wat', secret], ['setup', '--tool', 'claude'], ['setup', '--tool', 'evil', '--model', secret], ['setup', '--tool', 'claude', '--model', 'bad\n' + secret], ['setup', '--tool', 'claude', '--api-key', secret], ['run', '--tool', 'dsh', '--profile', secret], ['doctor', '--tool', 'claude', '--tool', 'claude'], ['backup', '--tool', 'claude', '--', secret]]) {
+  for (const args of [[], ['wat', secret], ['setup', '--tool', 'claude'], ['setup', '--tool', 'evil', '--model', secret], ['setup', '--tool', 'claude', '--model', 'bad\n' + secret], ['setup', '--tool', 'claude', '--api-key', secret], ['doctor', '--tool', 'claude', '--tool', 'claude'], ['backup', '--tool', 'claude', '--', secret]]) {
     const result = await run(process.execPath, [cli, ...args], { env })
     assert.equal(result.code, 1)
     assert.ok(!`${result.stdout}${result.stderr}`.includes(secret))
@@ -329,64 +308,7 @@ test('CLI help/version and noninteractive errors do not expose supplied values o
   assert.throws(() => parse(['setup', '--tool', 'claude', '--dry-run', '--dry-run']))
 })
 
-// Fake tools read native configuration themselves, just as direct CLI startup does.
-// Reports contain only booleans/non-secret arguments, never credential bytes.
-const nativeProbe = `const fs = require('node:fs');
-const path = require('node:path');
-const YAML = require(${JSON.stringify(fileURLToPath(new URL('../node_modules/yaml/dist/index.js', import.meta.url)))});
-const tool = path.basename(process.argv[1]);
-let mappingsPresent, keyPresent;
-if (tool === 'claude') {
-  const settings = JSON.parse(fs.readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'), 'utf8'));
-  mappingsPresent = settings.model === 'public-model' && settings.env.ANTHROPIC_BASE_URL === 'https://1endpoint.dev/api/v1' && ${JSON.stringify(MODEL_VARIABLES)}.every(name => settings.env[name] === 'public-model');
-  keyPresent = settings.env.ANTHROPIC_AUTH_TOKEN === process.env.EXPECTED_KEY;
-} else {
-  const rows = YAML.parse(fs.readFileSync(path.join(process.env.DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8'));
-  const config = id => rows.find(row => row.id === id).config;
-  const provider = config('llm-pi-ai').providers['1endpoint'];
-  mappingsPresent = provider.baseURL === 'https://1endpoint.dev/api/v1' && provider.models[0].id === 'public-model' && provider.apiKeyEnv === 'ONEENDPOINT_API_KEY' && config('agent-default-model').provider === '1endpoint' && config('agent-default-model').model === 'public-model';
-  keyPresent = fs.readFileSync(path.join(process.env.DSH_HOME, '.env'), 'utf8').includes(JSON.stringify(process.env.EXPECTED_KEY));
-}
-fs.writeFileSync(process.env.REPORT, JSON.stringify({ args: process.argv.slice(2), mappingsPresent, keyPresent,
-  homePreserved: process.env.HOME === process.env.EXPECTED_HOME,
-  nativeHomesPreserved: process.env.CLAUDE_CONFIG_DIR === process.env.EXPECTED_CLAUDE && process.env.DSH_HOME === process.env.EXPECTED_DSH,
-  noInjectedAuth: !process.env.ANTHROPIC_AUTH_TOKEN,
-  conflictPreserved: process.env.ANTHROPIC_API_KEY === 'poison' && process.env.ANTHROPIC_BASE_URL === 'https://evil.invalid',
-  noInjectedModel: !process.env.ANTHROPIC_MODEL,
-  inheritedKey: Boolean(process.env.ONEENDPOINT_API_KEY) }));
-process.exit(37);`;
-
 for (const tool of ['claude', 'dsh']) {
-  test(`${tool}: plain fake PATH launch reads native settings, respects custom homes and propagates status`, async t => {
-    const root = await fixture(t), env = await cliEnv(root), bin = path.join(root, 'bin'), report = path.join(root, 'report.json')
-    await fs.mkdir(bin)
-    await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\n${nativeProbe}`, { mode: 0o700 })
-    Object.assign(env, { PATH: bin, REPORT: report, EXPECTED_KEY: secret, EXPECTED_HOME: env.HOME, EXPECTED_CLAUDE: env.CLAUDE_CONFIG_DIR, EXPECTED_DSH: env.DSH_HOME, ANTHROPIC_API_KEY: 'poison', ANTHROPIC_BASE_URL: 'https://evil.invalid' })
-    await fs.writeFile(path.join(env.HOME, 'sentinel'), 'original')
-    const originalHome = await snapshot(env.HOME)
-    const configured = await run(process.execPath, [cli, 'setup', '--tool', tool, '--model', 'public-model'], { env })
-    assert.equal(configured.code, 0, configured.stderr)
-    const doctor = await run(process.execPath, [cli, 'doctor', '--tool', tool], { env })
-    assert.equal(doctor.code, 0, doctor.stderr + doctor.stdout)
-    if (tool === 'claude') assert.match(doctor.stdout, /environment|override|conflict/i)
-    const args = tool === 'claude' ? ['-p', 'hello'] : ['--help']
-    const result = await run(process.execPath, [cli, 'run', '--tool', tool, '--', ...args], { env })
-    assert.equal(result.code, 37, result.stderr)
-    const recorded = JSON.parse(await fs.readFile(report, 'utf8'))
-    assert.deepEqual(recorded.args, tool === 'dsh' ? ['--profile', 'web', ...args] : args)
-    for (const name of ['mappingsPresent', 'keyPresent', 'homePreserved', 'nativeHomesPreserved', 'noInjectedAuth', 'noInjectedModel', 'conflictPreserved', 'inheritedKey']) assert.equal(recorded[name], true, name)
-    assert.deepEqual(await snapshot(env.HOME), originalHome)
-    assert.ok(!`${configured.stdout}${doctor.stdout}${result.stdout}${result.stderr}${JSON.stringify(recorded)}`.includes(secret))
-    // Recovery journals are private and may contain credentials; legacy metadata stays secret-free.
-    const { plan } = await loadState(env.ONEENDPOINT_HELPER_HOME, tool)
-    for (const file of plan.files) assert.ok(!(await fs.readFile(file.path, 'utf8')).includes(secret))
-    const blocked = await run(process.execPath, [cli, 'run', '--tool', tool, '--', `--model=${secret}`], { env })
-    assert.equal(blocked.code, 1)
-    assert.ok(!`${blocked.stdout}${blocked.stderr}`.includes(secret))
-    const missing = await run(process.execPath, [cli, 'run', '--tool', tool], { env: { ...env, ONEENDPOINT_API_KEY: '' } })
-    assert.equal(missing.code, 1)
-  })
-
   test(`${tool}: legacy metadata migrates on repeated setup; reconfigure/remove restore native values and preserve edits`, async t => {
     const root = await fixture(t), env = await cliEnv(root), stateDir = env.ONEENDPOINT_HELPER_HOME
     const claudePath = path.join(env.CLAUDE_CONFIG_DIR, 'settings.json')
@@ -461,38 +383,3 @@ for (const tool of ['claude', 'dsh']) {
   })
 }
 
-// Explicit opt-in: the normal suite never invokes an installed CLI or any inference.
-// This test talks only to an ephemeral loopback server with a dummy key and isolated HOME.
-test('installed Claude loopback Messages protocol (opt-in, no real credentials)', { skip: !process.env.CODING_HELPER_TEST_CLAUDE, timeout: 45000 }, async t => {
-  const root = await fixture(t), env = await cliEnv(root), requests = []
-  const server = http.createServer(async (req, res) => {
-    let body = ''; for await (const chunk of req) body += chunk
-    requests.push({ url: req.url, headers: req.headers, body })
-    const message = { id: 'msg_fixture', type: 'message', role: 'assistant', model: 'fixture-public-model', content: [{ type: 'text', text: 'LOOPBACK_OK' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }
-    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(message))
-  })
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  t.after(() => new Promise(resolve => server.close(resolve)))
-  const endpoint = `http://127.0.0.1:${server.address().port}/api/v1`
-  const plan = launchClaude({ stateDir: env.ONEENDPOINT_HELPER_HOME, model: 'fixture-public-model', args: ['-p', 'Say LOOPBACK_OK', '--output-format', 'json', '--max-turns', '1', '--no-session-persistence'] })
-  const settings = JSON.parse(plan.files[0].content)
-  settings.env.ANTHROPIC_BASE_URL = endpoint
-  await fs.mkdir(path.dirname(plan.files[0].path), { recursive: true })
-  await fs.writeFile(plan.files[0].path, JSON.stringify(settings))
-  await fs.mkdir(plan.env.CLAUDE_CONFIG_DIR, { recursive: true })
-  // Mark only this isolated fixture onboarded, never read actual installed-tool settings.
-  await fs.writeFile(path.join(plan.env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true }))
-  const childEnv = childEnvironment(env, plan, 'loopback-dummy-key')
-  Object.assign(childEnv, { ANTHROPIC_BASE_URL: endpoint, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', CLAUDE_CODE_MAX_RETRIES: '0' })
-  const result = await run(process.env.CODING_HELPER_TEST_CLAUDE, plan.args, { env: childEnv, cwd: root, timeout: 35000 })
-  assert.equal(result.code, 0, result.stderr + result.stdout)
-  const messages = requests.filter(req => req.url.split('?')[0] === '/api/v1/v1/messages')
-  assert.ok(messages.length > 0, JSON.stringify(requests))
-  const request = messages.find(req => JSON.parse(req.body).model === 'fixture-public-model')
-  assert.ok(request, JSON.stringify(messages))
-  t.diagnostic(`Observed Claude Messages URL: ${request.url}`)
-  assert.equal(request.headers.authorization, 'Bearer loopback-dummy-key')
-  assert.equal(request.headers['x-api-key'], undefined)
-  assert.ok(request.headers['anthropic-version'])
-  assert.ok(result.stdout.includes('LOOPBACK_OK'))
-})

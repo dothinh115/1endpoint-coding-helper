@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises'
 import { fetchModels } from './catalog.mjs'
 import { openConsole } from './browser.mjs'
 import * as claudeAdapter from './adapters/claude.mjs'
-import { findExecutable, TOOL_INFO, missingToolMessage } from './tools.mjs'
+import { findExecutable, findOpencodex, TOOL_INFO, missingToolMessage, opencodexInstallMessage } from './tools.mjs'
 
 const palette = { selected: 36, warning: 33, error: 31 }
 
@@ -21,10 +21,15 @@ function uiError(cancelled = false) {
 }
 const clean = text => String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
 
+/** The command a user runs after setup; kept here so both entry points agree. */
+function startCommand(tool) {
+  return tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command
+}
+
 /** Arrow-key menu. No typed answers are accepted. */
 export async function select({ message, choices, input = process.stdin, output = process.stdout, language = 'en' }) {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') {
-    throw new Error('Non-interactive setup needs setup --tool dsh|claude|openclaw|hermes --model PUBLIC_MODEL.')
+    throw new Error('Non-interactive setup needs setup --tool codex|dsh|claude|openclaw|hermes --model PUBLIC_MODEL.')
   }
   if (!Array.isArray(choices) || !choices.length || choices.some(choice => !choice || typeof choice.label !== 'string')) {
     throw new Error('Selection requires labeled choices.')
@@ -232,7 +237,7 @@ async function modelQuestion(input, output, language = 'en') {
 }
 
 /** Gather CLI arguments only. State and tool execution belong to dispatch. */
-export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), isToolInstalled = async tool => Boolean(await findExecutable(TOOL_INFO[tool].command)), openConsole: openBrowser = openConsole }) {
+export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), isToolInstalled = async tool => Boolean(await findExecutable(TOOL_INFO[tool].command)), isOpencodexInstalled = async () => Boolean(await findOpencodex()), openConsole: openBrowser = openConsole }) {
   if (typeof dispatch !== 'function') throw new Error('Wizard requires a CLI dispatcher.')
   let language = 'en'
   const t = (en, vi) => language === 'vi' ? vi : en
@@ -250,47 +255,59 @@ export async function wizard({ dispatch, input = process.stdin, output = process
       { label: t('Reconfigure', 'Cấu hình lại'), value: 'reconfigure' },
       { label: t('Remove', 'Xóa cấu hình'), value: 'remove' },
       { label: t('Doctor', 'Kiểm tra'), value: 'doctor', description: t('Local checks; no network requests', 'Kiểm tra cục bộ; không gửi yêu cầu mạng') },
-      { label: t('Run', 'Chạy'), value: 'run', description: t('Starts the tool; may send billed requests', 'Khởi chạy công cụ; có thể phát sinh phí') },
       { label: t('Exit', 'Thoát'), value: 'exit' }
     ])
     if (action === 'exit') return
     const tool = await choose(t('Choose coding tool', 'Chọn công cụ lập trình'), Object.entries(TOOL_INFO).map(([value, info]) => ({ label: info.name, value })))
     const toolName = TOOL_INFO[tool].name
-    if (['setup', 'reconfigure', 'run'].includes(action) && !await isToolInstalled(tool)) {
+    const argv = [action, '--tool', tool]
+    const context = { language }
+    if (tool === 'codex' && ['setup', 'reconfigure'].includes(action)) {
+      const route = await choose(t('How should Codex reach 1endpoint?', 'Codex sẽ kết nối tới 1endpoint theo cách nào?'), [
+        { label: t('Direct configuration file', 'Tệp cấu hình trực tiếp'), value: 'direct', description: t('Writes ~/.codex/config.toml; no extra software', 'Ghi ~/.codex/config.toml; không cần phần mềm thêm') },
+        { label: t('OpenCodex', 'OpenCodex'), value: 'opencodex', description: t('Routes Codex through an installed OpenCodex proxy', 'Định tuyến Codex qua proxy OpenCodex đã cài') }
+      ])
+      context.route = route
+      argv.push('--route', route)
+      if (route === 'opencodex' && !await isOpencodexInstalled()) {
+        output.write(colorize(opencodexInstallMessage(language), 'warning', { output }) + '\n')
+        return
+      }
+      if (route === 'direct' && !await isToolInstalled('codex')) {
+        output.write(colorize(missingToolMessage('codex', language), 'warning', { output }) + '\n')
+        return
+      }
+    } else if (['setup', 'reconfigure'].includes(action) && !await isToolInstalled(tool)) {
       output.write(colorize(missingToolMessage(tool, language), 'warning', { output }) + '\n')
       return
     }
-    const argv = [action, '--tool', tool]
-    const context = { language }
-    if (['setup', 'reconfigure', 'run'].includes(action)) {
+    if (['setup', 'reconfigure'].includes(action)) {
       let available = false
       try { available = (await getKeyStatus({ tool }))?.available === true } catch {}
-      if (action !== 'run' || !available) {
-        while (true) {
-          const keyAction = await choose(t('API key', 'Khóa API'), [
-            { label: t('Paste API key', 'Dán khóa API'), value: 'paste' },
-            { label: t('Open Console create API key', 'Mở Console tạo khóa API'), value: 'open', description: t('Enter opens the API keys page', 'Enter mở trang khóa API') },
-            ...(available ? [{ label: t('Use existing saved/environment key', 'Dùng khóa đã lưu hoặc biến môi trường'), value: 'existing' }] : []),
-            { label: t('Skip; use environment key later', 'Bỏ qua; dùng khóa môi trường sau'), value: 'skip' },
-            { label: t('Cancel', 'Hủy'), value: 'cancel' }
-          ])
-          if (keyAction === 'cancel') return
-          if (keyAction === 'existing' || keyAction === 'skip') break
-          if (keyAction === 'open') {
-            try { await openBrowser({ language }) }
-            catch { output.write(t('Could not open Console. Select Open Console to retry, or paste a key.\n', 'Không mở được Console. Chọn Mở Console để thử lại hoặc dán khóa.\n')) }
-            continue
-          }
-          let key
-          try { key = await readApiKey({ input, output, language }) }
-          catch (error) {
-            if (error.code !== 'UI_INVALID_KEY') throw error
-            output.write(error.message + '\n'); continue
-          }
-          output.write(t('Local keys are plaintext, mode 0600: accessible to your user account, not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần, quyền 0600: tài khoản của bạn có thể đọc, không được mã hóa.\n'))
-          context.apiKey = key; context.saveKey = true
-          break
+      while (true) {
+        const keyAction = await choose(t('API key', 'Khóa API'), [
+          { label: t('Paste API key', 'Dán khóa API'), value: 'paste' },
+          { label: t('Open Console create API key', 'Mở Console tạo khóa API'), value: 'open', description: t('Enter opens the API keys page', 'Enter mở trang khóa API') },
+          ...(available ? [{ label: t('Use existing saved/environment key', 'Dùng khóa đã lưu hoặc biến môi trường'), value: 'existing' }] : []),
+          { label: t('Skip; use environment key later', 'Bỏ qua; dùng khóa môi trường sau'), value: 'skip' },
+          { label: t('Cancel', 'Hủy'), value: 'cancel' }
+        ])
+        if (keyAction === 'cancel') return
+        if (keyAction === 'existing' || keyAction === 'skip') break
+        if (keyAction === 'open') {
+          try { await openBrowser({ language }) }
+          catch { output.write(t('Could not open Console. Select Open Console to retry, or paste a key.\n', 'Không mở được Console. Chọn Mở Console để thử lại hoặc dán khóa.\n')) }
+          continue
         }
+        let key
+        try { key = await readApiKey({ input, output, language }) }
+        catch (error) {
+          if (error.code !== 'UI_INVALID_KEY') throw error
+          output.write(error.message + '\n'); continue
+        }
+        output.write(t('Local keys are plaintext, mode 0600: accessible to your user account, not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần, quyền 0600: tài khoản của bạn có thể đọc, không được mã hóa.\n'))
+        context.apiKey = key; context.saveKey = true
+        break
       }
     }
     if (action === 'setup' || action === 'reconfigure') {
@@ -334,15 +351,10 @@ export async function wizard({ dispatch, input = process.stdin, output = process
         }
         argv.push('--model', selected.sonnet)
       }
+      if (tool === 'codex' && !manual) context.models = models.map(({ id, name, contextWindow, vision }) => ({ id, name, contextWindow, vision }))
       if (tool === 'claude') output.write(t('Your permissions, hooks and project settings are preserved. Project overrides and managed policies may take priority.\n', 'Giữ nguyên quyền, hook và cài đặt dự án. Cấu hình dự án và chính sách quản trị có thể được ưu tiên.\n'))
-      if (!await confirm(t(`${action === 'setup' ? 'Apply' : 'Update'} ${toolName} user configuration? Unrelated settings are preserved.`, `${action === 'setup' ? 'Áp dụng' : 'Cập nhật'} cấu hình ${toolName}? Giữ nguyên cài đặt không liên quan.`))) return
-    }
-    if (action === 'run' && tool === 'dsh') {
-      const profile = await choose(t(`Choose ${toolName} launch profile`, `Chọn chế độ khởi chạy ${toolName}`), [
-        { label: t('Default (web)', 'Mặc định (web)'), value: null },
-        ...['web', 'headless', 'acp', 'sdk'].map(value => ({ label: value, value }))
-      ])
-      if (profile) argv.push('--profile', profile)
+      const routeLabel = tool === 'codex' ? ` (${context.route})` : ''
+      if (!await confirm(t(`${action === 'setup' ? 'Apply' : 'Update'} ${toolName}${routeLabel} user configuration? Unrelated settings are preserved.`, `${action === 'setup' ? 'Áp dụng' : 'Cập nhật'} cấu hình ${toolName}${routeLabel}? Giữ nguyên cài đặt không liên quan.`))) return
     }
     if (action === 'remove') {
       const mode = await choose(t('Remove helper configuration', 'Xóa cấu hình riêng'), [
@@ -362,7 +374,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
     }
     const result = await dispatch(argv, context)
     if (action === 'setup' || action === 'reconfigure') {
-      output.write(t(`Restart your ${toolName} session to apply. Existing sessions do not update automatically. Start a new session with ${tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command}.\n`, `Khởi động lại phiên ${toolName} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command}.\n`))
+      output.write(t(`Restart your ${toolName} session to apply. Existing sessions do not update automatically. Start a new session with ${startCommand(tool)}.\n`, `Khởi động lại phiên ${toolName} để áp dụng. Phiên hiện có không tự cập nhật. Mở phiên mới bằng ${startCommand(tool)}.\n`))
     }
     return result
   } catch (error) {

@@ -1,11 +1,11 @@
 # @1endpoint/coding-helper
 
-Connect **DeepSeek Harness (DSH)**, **Claude Code**, **OpenClaw** or **Hermes** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
+Connect **Codex**, **DeepSeek Harness (DSH)**, **Claude Code**, **OpenClaw** or **Hermes** to 1endpoint with an interactive setup menu. Choose your language and models without editing configuration files by hand, then use the coding tool normally.
 
 ## Before you start
 
 - Install **Node.js 22.19 or newer**.
-- Install the tool you want to configure first: [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.claude.com/docs/en/overview), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
+- Install the tool you want to configure first: [Codex](https://developers.openai.com/codex/), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
 - Have a 1endpoint API key ready. Keep it private: do not paste it into command arguments, shared configuration files or a repository.
 
 ## 1. Set up your tool
@@ -18,7 +18,7 @@ npx @1endpoint/coding-helper
 
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
-3. Select the tool you want to configure. Before Setup, Reconfigure or Run continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
+3. Select the tool you want to configure. Before Setup or Reconfigure continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
 4. Paste your key into the **masked API-key prompt**, or select **Open Console** and press Enter to create one first. If a saved key is available, choose **Use an existing key** to reuse it.
 5. Select models from the 1endpoint catalog.
 6. Review the selection, then choose **Confirm**. The key is saved automatically and the tool's native user configuration is updated.
@@ -31,6 +31,13 @@ Most text uses your terminal's default color. Cyan marks the current choice, yel
 
 ### Choose models
 
+For Codex, first choose how Codex should reach 1endpoint:
+
+- **Direct configuration file** writes `~/.codex/config.toml` and a helper-owned model catalog. Codex keeps its own login; no extra software is needed.
+- **OpenCodex** writes the 1endpoint provider into an installed [OpenCodex](https://github.com/lidge-jun/opencodex/releases/latest) proxy instead. If `ocx` is not on `PATH`, the helper stops and prints the install command for your operating system.
+
+Either way you then pick one default model, and **every text model from the 1endpoint catalog is added to that route in the same step** — context windows and image support come from the published catalog, so you do not register models one by one.
+
 For DSH, choose the model you want to use by default. Setup targets the **web** profile by default. Scripted setup/reconfiguration can select `--profile web`, `headless`, `acp` or `sdk`; `sdk-minimal` is not supported. Start the same profile you configured.
 
 For OpenClaw and Hermes, choose one default model. OpenClaw setup preserves gateway settings and agent-specific overrides; use its existing gateway lifecycle. Hermes preserves auxiliary-model and fallback-provider settings.
@@ -42,6 +49,12 @@ If the catalog cannot be loaded, choose **Retry**, explicitly choose **Manual mo
 ## 2. Restart and use the tool normally
 
 **Close any existing tool session after setup or reconfiguration, then start a new one. An already-open session does not pick up the new connection or model mapping.**
+
+Start Codex by opening Codex Desktop, restarting the IDE extension, or running:
+
+```bash
+codex
+```
 
 Start DSH:
 
@@ -57,33 +70,48 @@ claude
 
 Start Hermes with `hermes`. For OpenClaw, restart your configured gateway using its normal lifecycle, then open `openclaw tui`. The helper does not install, start or alter a background gateway service.
 
-**You do not need the helper to launch the tool.** Its optional **Run** action and `run --tool dsh|claude|openclaw|hermes` command use the native configuration too. Tool requests may incur charges; normal permission, onboarding and workspace-trust prompts remain active.
+**You do not need the helper to launch the tool.** Setup writes the tool's own native configuration, so normal launches already use 1endpoint. Tool requests may incur charges; normal permission, onboarding and workspace-trust prompts remain active.
+
+### If you chose OpenCodex
+
+Setup finishes by printing the exact next steps, and Doctor repeats them if you lose them:
+
+1. Start the proxy if it is not already running: `ocx start`.
+2. Open the dashboard at **http://localhost:10100/**.
+3. Restart Codex Desktop, the IDE extension and any terminal session, then run `codex`.
+
+When a proxy is already running, the helper refreshes the Codex model catalog through OpenCodex for you. Otherwise it tells you to run `ocx sync` once after `ocx start`. Codex keeps its own login and settings; OpenCodex only supplies the 1endpoint provider.
 
 ### What stays in place
 
 Setup updates the model/provider/authentication values needed for 1endpoint in your actual user configuration. Existing permissions, hooks, unrelated provider configuration, plugins and sessions are preserved. Project and local settings remain active; they are not replaced or isolated away. The selected 1endpoint provider entry and routing/authentication values are managed by setup, with their previous values recorded for removal.
 
+For Codex, setup replaces only the `model`, `model_provider`, `model_catalog_json` and `[model_providers.1endpoint]` values; every other line, comment and table is preserved, and removal restores the previous values and deletes the helper's catalog file. Reasoning-effort keys you set yourself stay untouched, and the generated catalog declares no reasoning levels so Codex does not send an effort the model rejects.
+
 Project/local configuration, inherited environment variables and managed organization policy may take precedence over the selected defaults. Explicit models in agent/skill definitions are not rewritten. Run Doctor if your selection is not taking effect. The helper warns about detectable overrides; it does not edit shell startup files, project settings, managed policy or onboarding state, and does not bypass permissions.
 
 ## Native locations and custom paths
 
-| Platform | Claude Code user settings | DSH home and default profile |
-| --- | --- | --- |
-| macOS | `~/.claude/settings.json` | `~/.dsh`, profile `web` |
-| Linux | `~/.claude/settings.json` | `~/.dsh`, profile `web` |
-| Windows | `%USERPROFILE%\.claude\settings.json` | `%USERPROFILE%\.dsh`, profile `web` |
+| Platform | Codex home | Claude Code user settings | DSH home and default profile |
+| --- | --- | --- | --- |
+| macOS | `~/.codex` | `~/.claude/settings.json` | `~/.dsh`, profile `web` |
+| Linux | `~/.codex` | `~/.claude/settings.json` | `~/.dsh`, profile `web` |
+| Windows | `%USERPROFILE%\.codex` | `%USERPROFILE%\.claude\settings.json` | `%USERPROFILE%\.dsh`, profile `web` |
 
 These are path conventions, not a claim that Windows or Linux end-to-end behavior has been tested.
 
+- **Codex:** `CODEX_HOME` selects the Codex home (default `~/.codex`). Direct setup manages the `config.toml` root keys `model`, `model_provider` and `model_catalog_json`, the `[model_providers.1endpoint]` table, and its own `1endpoint-models.json` catalog in the same home. Desktop, the terminal client and the IDE extension read that file, so one setup covers all three. The OpenCodex route writes the `1endpoint` provider into the OpenCodex configuration instead and leaves `config.toml` to OpenCodex's own sync.
 - **Claude Code:** `CLAUDE_CONFIG_DIR` selects the configuration directory; setup writes its `settings.json`. Use an absolute path (or the supported `~/` form).
 - **DSH:** `DSH_HOME` selects the native home. Setup manages the relevant entries in `profiles/<profile>/cordis.patch.yml` and, when needed, the home `cordis.patch.yml`, plus the API-key entry in `.env`. An existing managed credential reference for that key is reconciled when necessary.
-- **OpenClaw:** setup updates `~/.openclaw/openclaw.json`, respecting `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`. It manages the 1endpoint provider, selected model entry and default model/fallback selection. Existing unrelated model entries, tools, channel credentials and gateway settings stay intact. JSON5 is accepted; formatting/comments may be normalized. Configurations using `$include` or external read-only management are refused rather than flattened. Use an explicit state directory for named profiles.
+- **OpenClaw:** setup updates `~/.openclaw/openclaw.json`, respecting `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`. It manages the 1endpoint provider, selected model entry and default model/fallback selection. Existing unrelated model entries, tools, channel credentials and gateway settings stay intact. JSON5 is accepted; formatting/comments may be normalized. Configurations using `$include` or external read-only management are refused rather than flattened. Use an explicit state directory for named profiles. If legacy Clawdbot files are detected, set OPENCLAW_CONFIG_PATH explicitly to the active file before setup; the helper does not silently create a competing configuration.
 - **Hermes:** setup updates `~/.hermes/config.yaml` (`%LOCALAPPDATA%\hermes\config.yaml` on Windows), respecting `HERMES_HOME`. It manages the named 1endpoint provider and main model connection fields, without changing `.env`, auth pools, auxiliary models, permissions or sessions. YAML formatting/comments may be normalized.
 - **Helper state:** defaults to `~/.1endpoint/coding-helper`. Set an absolute `ONEENDPOINT_HELPER_HOME` to relocate it; this does not relocate the native tool homes.
 
 Set custom paths **before setup** and use those same path variables when running the tool, reconfiguring, checking or removing the connection. For example, on macOS/Linux:
 
 ```bash
+export CODEX_HOME="$HOME/.codex-work"
+# Or, for Claude:
 export CLAUDE_CONFIG_DIR="$HOME/.claude-work"
 # Or, for DSH:
 export DSH_HOME="$HOME/.dsh-work"
@@ -95,6 +123,7 @@ On Windows, set the corresponding variables in your shell, using an absolute pat
 ## Check your setup
 
 ```bash
+npx @1endpoint/coding-helper doctor --tool codex
 npx @1endpoint/coding-helper doctor --tool dsh
 npx @1endpoint/coding-helper doctor --tool claude
 npx @1endpoint/coding-helper doctor --tool openclaw
@@ -143,7 +172,7 @@ npx @1endpoint/coding-helper remove --tool dsh --dry-run
 npx @1endpoint/coding-helper remove --tool dsh --yes
 ```
 
-Use `--tool claude`, `--tool openclaw` or `--tool hermes` for the other tools. Removal restores only the managed native values to their pre-setup baseline, removing values that did not previously exist. It preserves unrelated edits, permissions, hooks, providers and runtime conversations. **It is not a whole-file reset.** Restart the tool after removal to use the restored settings.
+Use `--tool codex`, `--tool claude`, `--tool openclaw` or `--tool hermes` for the other tools. For Codex, removal also restores or deletes the helper's `1endpoint-models.json` catalog and, on the OpenCodex route, puts the previous OpenCodex `1endpoint` provider entry back. Removal restores only the managed native values to their pre-setup baseline, removing values that did not previously exist. It preserves unrelated edits, permissions, hooks, providers and runtime conversations. **It is not a whole-file reset.** Restart the tool after removal to use the restored settings.
 
 The menu asks whether to **keep or delete the helper's saved API key**. Scripted removal retains it unless you explicitly add `--remove-key`:
 
@@ -197,6 +226,9 @@ For another shell, use its secure environment-variable mechanism or your secret 
 | New model is not taking effect | Restart the tool; check Doctor for project, environment or managed overrides and check custom path/profile variables. |
 | Older setup only works through the helper | Rerun Setup with the same mapping and saved key, or Reconfigure, then restart and launch normally. |
 | Managed configuration drift | Review the changes; reconcile them or preview explicit limited force removal before setting up again. |
+| Codex shows no 1endpoint models | Run Doctor. A direct setup needs the installed Codex client to read its own catalog template, and the OpenCodex route needs `ocx start` plus `ocx sync` before Codex sees the models. |
+| `ocx` not found when choosing OpenCodex | Install OpenCodex (`npm install -g @bitkyc08/opencodex`, or the release for your OS), reopen the terminal and run the helper again. |
+| Codex requests fail with `invalid_reasoning_effort` | Your own `config.toml` sets a reasoning effort this model does not support. Remove `model_reasoning_effort` or pick a supported level; the generated catalog declares no reasoning levels. |
 | Authentication or model request fails | Confirm key, model access and balance in 1endpoint. Doctor does not validate server-side access. |
 
 This is an independent integration, not an official DeepSeek or Anthropic product.

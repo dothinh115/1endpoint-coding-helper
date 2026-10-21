@@ -7,7 +7,17 @@ test('catalog decodes sorted text-only valid IDs and strips terminal controls', 
     { id: 'b', name: 'Beta' }, { id: 'a', name: '\u001bAlpha\n' },
     { id: 'image', type: 'image' }, { id: 'embed', type: 'embedding' },
     { id: 'bad\nID' }, { id: 'a', name: 'Alpha' }, null,
-  ] }), [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }])
+  ] }), [
+    { id: 'a', name: 'Alpha', contextWindow: null, vision: false },
+    { id: 'b', name: 'Beta', contextWindow: null, vision: false },
+  ])
+  assert.deepEqual(decodeModels({ data: [
+    { id: 'v', display_name: 'Vision', context_window: 1000000, vision: { image: true } },
+    { id: 'w', context_window: 'not-a-number', vision: { image: false } },
+  ] }), [
+    { id: 'v', name: 'Vision', contextWindow: 1000000, vision: true },
+    { id: 'w', name: 'w', contextWindow: null, vision: false },
+  ])
   assert.throws(() => decodeModels({ data: [] }))
   assert.throws(() => decodeModels({ data: 'bad' }))
 })
