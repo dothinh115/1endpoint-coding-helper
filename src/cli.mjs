@@ -11,7 +11,7 @@ import { applyCodex, removeCodex, inspectCodex, readCatalogTemplate } from './na
 import { applyOpencodex, inspectOpencodex, removeOpencodex, opencodexRunner, opencodexLiveness, syncCodexThroughOpencodex, opencodexDashboardUrl } from './native/codex-opencodex.mjs'
 import { nativeWarnings } from './native/diagnostics.mjs'
 import { applyAgent, removeAgent, inspectAgent } from './native/agents.mjs'
-import { findExecutable, findOpencodex, TOOL_INFO, OPENCODEX, missingToolMessage, opencodexInstallMessage } from './tools.mjs'
+import { findExecutable, findCodex, findOpencodex, TOOL_INFO, OPENCODEX, missingToolMessage, opencodexInstallMessage } from './tools.mjs'
 import { fetchModels } from './catalog.mjs'
 
 const HELP = `@1endpoint/coding-helper — native 1endpoint coding-tool setup
@@ -145,7 +145,8 @@ async function main(argv, context = {}) {
     try { state = (await loadState(stateDir, tool)).state } catch (error) { if (command !== 'remove' || options['--force']) throw error }
   }
   const route = tool === 'codex' && command === 'remove' ? await codexRouteForRemoval({ stateDir, options, state }) : codexRoute(tool, options, state)
-  const codexBin = ['codex', 'setup', 'reconfigure', 'doctor'].includes(tool) ? await findExecutable(TOOL_INFO.codex.command) : null
+  const codexInstall = tool === 'codex' ? await findCodex() : null
+  const codexBin = codexInstall?.command ?? null
   const ocxBin = tool === 'codex' ? await findOpencodex() : null
   if (tool === 'codex') {
     if (['setup', 'reconfigure'].includes(command)) {
@@ -228,9 +229,11 @@ async function main(argv, context = {}) {
     const credential = context.apiKey ? { key: context.apiKey, source: 'session' } : await getCredential({ stateDir, tool })
     const inspected = await native.inspect()
     console.log(`${t('Configuration integrity: OK', 'Tính toàn vẹn cấu hình: OK')} (${tool})`)
-    console.log(`${t('CLI installed', 'Đã cài CLI')}: ${tool === 'codex' ? (codexBin ? t('yes', 'có') : t('no', 'chưa')) : (await findExecutable(TOOL_INFO[tool].command) ? t('yes', 'có') : t('no', 'chưa'))}`)
+    if (tool !== 'codex') console.log(`${t('CLI installed', 'Đã cài CLI')}: ${await findExecutable(TOOL_INFO[tool].command) ? t('yes', 'có') : t('no', 'chưa')}`)
     if (tool === 'codex') {
       console.log(`${t('Route', 'Đường kết nối')}: ${loaded?.route || 'direct'}`)
+      console.log(`${t('Codex Desktop detected', 'Phát hiện Codex Desktop')}: ${codexInstall?.surface === 'desktop' ? t('yes', 'có') : t('no', 'chưa')}`)
+      console.log(`${t('Terminal codex detected', 'Phát hiện codex trên terminal')}: ${codexInstall?.terminal ? t('yes', 'có') : t('no', 'chưa')}`)
       console.log(`${t('OpenCodex installed', 'Đã cài OpenCodex')}: ${ocxBin ? t('yes', 'có') : t('no', 'chưa')}`)
     }
     console.log(`${t('API key', 'Khóa API')}: ${credential.key ? t('available (not validated)', 'đã có (chưa xác thực)') : t('missing', 'chưa có')}`)

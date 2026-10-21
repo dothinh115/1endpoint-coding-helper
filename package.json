@@ -1,6 +1,6 @@
 {
   "name": "@1endpoint/coding-helper",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Native 1endpoint setup for coding tools and agents",
   "type": "module",
   "bin": {

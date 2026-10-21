@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { findExecutable, TOOL_INFO } from '../src/tools.mjs'
+import { findExecutable, findCodex, TOOL_INFO, missingToolMessage } from '../src/tools.mjs'
 
 async function fixture(t) {
   const base = await fs.realpath(os.tmpdir())
@@ -51,4 +51,34 @@ test('package description stays generic as tool support expands', async () => {
   const metadata = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(metadata.description, 'Native 1endpoint setup for coding tools and agents')
   assert.equal(metadata.files.includes('docs'), false)
+})
+
+test('Codex detection finds the Desktop app bundle as well as the terminal executable', async t => {
+  const root = await fixture(t)
+  const home = path.join(root, 'home')
+  const bundle = path.join(home, 'Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'bin')
+  const bin = path.join(root, 'bin')
+  await fs.mkdir(bin)
+  assert.deepEqual(await findCodex({ env: { PATH: bin }, home, platform: 'darwin', applicationRoots: [path.join(home, 'Applications')] }), { command: null, surface: null, terminal: null })
+
+  const terminal = path.join(bin, 'codex')
+  await fs.writeFile(terminal, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  assert.deepEqual(await findCodex({ env: { PATH: bin }, home, platform: 'darwin', applicationRoots: [path.join(home, 'Applications')] }), { command: terminal, surface: 'terminal', terminal })
+
+  await fs.mkdir(bundle, { recursive: true })
+  const desktop = path.join(bundle, 'codex')
+  await fs.writeFile(desktop, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  // The Desktop bundle wins because it is the client that reads the generated catalog.
+  assert.deepEqual(await findCodex({ env: { PATH: bin }, home, platform: 'darwin', applicationRoots: [path.join(home, 'Applications')] }), { command: desktop, surface: 'desktop', terminal })
+  // Without the terminal executable a Desktop-only installation is still supported.
+  assert.deepEqual(await findCodex({ env: { PATH: path.join(root, 'empty') }, home, platform: 'darwin', applicationRoots: [path.join(home, 'Applications')] }), { command: desktop, surface: 'desktop', terminal: null })
+  // Other platforms rely on the terminal executable only.
+  assert.deepEqual(await findCodex({ env: { PATH: bin }, home, platform: 'linux', applicationRoots: [path.join(home, 'Applications')] }), { command: terminal, surface: 'terminal', terminal })
+})
+
+test('missing Codex guidance names both installation surfaces', () => {
+  assert.match(missingToolMessage('codex', 'en'), /Codex Desktop app was found in \/Applications/)
+  assert.match(missingToolMessage('codex', 'en'), /Install Codex Desktop or the Codex CLI/)
+  assert.match(missingToolMessage('codex', 'vi'), /Cài Codex Desktop hoặc Codex CLI trước/)
+  assert.match(missingToolMessage('dsh', 'en'), /not on PATH/)
 })

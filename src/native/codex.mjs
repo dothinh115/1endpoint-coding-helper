@@ -400,12 +400,14 @@ export async function removeCodex({ stateDir, env = process.env, home = os.homed
       const entry = journal.fields[fieldId(scope, keyName)].before
       return [scope === 'root' ? keyName : `table.${keyName}`, entry.present ? entry.value : null]
     }))
-    const nextText = patchCodexToml(targetBefore.raw ?? '', values)
+    const restored = patchCodexToml(targetBefore.raw ?? '', values)
+    // A config.toml the helper created and then emptied is removed rather than left as a stub.
+    const nextText = !journal.existed && restored.trim() === '' ? null : restored
     const nextCatalog = journal.catalog.created ? null : catalogBefore.raw
     if (!dryRun) {
       const changes = []
       if ((nextCatalog ?? null) !== (catalogBefore.raw ?? null)) changes.push({ file: paths.catalog, before: catalogBefore, after: nextCatalog })
-      if (nextText !== (targetBefore.raw ?? '')) changes.push({ file: paths.target, before: targetBefore, after: nextText })
+      if ((nextText ?? '') !== (targetBefore.raw ?? '')) changes.push({ file: paths.target, before: targetBefore, after: nextText })
       changes.push({ file: paths.journal, before: journalBefore, after: null })
       await commit(changes)
     }

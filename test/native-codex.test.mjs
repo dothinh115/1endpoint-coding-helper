@@ -218,3 +218,18 @@ test('a client that cannot report its catalog still produces a parseable fallbac
     assert.deepEqual(entry.supported_reasoning_levels, [])
   }
 })
+
+test('removal deletes a config.toml the helper created instead of leaving an empty stub', async t => {
+  const f = await fixture(t, undefined)
+  await applyCodex({ ...f.options, model, key, models, template })
+  await removeCodex({ ...f.options })
+  await assert.rejects(fs.stat(f.configPath), { code: 'ENOENT' })
+  await assert.rejects(fs.stat(f.catalogPath), { code: 'ENOENT' })
+})
+
+test('removal keeps a pre-existing file even when every managed key is gone', async t => {
+  const f = await fixture(t, '# keep this comment\n')
+  await applyCodex({ ...f.options, model, key, models, template })
+  await removeCodex({ ...f.options })
+  assert.equal(await fs.readFile(f.configPath, 'utf8'), '# keep this comment\n')
+})

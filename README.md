@@ -5,7 +5,7 @@ Connect **Codex**, **DeepSeek Harness (DSH)**, **Claude Code**, **OpenClaw** or 
 ## Before you start
 
 - Install **Node.js 22.19 or newer**.
-- Install the tool you want to configure first: [Codex](https://developers.openai.com/codex/), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
+- Install the tool you want to configure first: [Codex](https://learn.chatgpt.com/docs), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
 - Have a 1endpoint API key ready. Keep it private: do not paste it into command arguments, shared configuration files or a repository.
 
 ## 1. Set up your tool
@@ -33,7 +33,7 @@ Most text uses your terminal's default color. Cyan marks the current choice, yel
 
 For Codex, first choose how Codex should reach 1endpoint:
 
-- **Direct configuration file** writes `~/.codex/config.toml` and a helper-owned model catalog. Codex keeps its own login; no extra software is needed.
+- **Direct configuration file** writes `~/.codex/config.toml` and a helper-owned model catalog. Codex keeps its own login; no extra software is needed. A Desktop-only installation works: when `codex` is not on `PATH`, the helper uses the CLI bundled inside `ChatGPT.app` (or `Codex.app`), which reads the same file.
 - **OpenCodex** writes the 1endpoint provider into an installed [OpenCodex](https://github.com/lidge-jun/opencodex/releases/latest) proxy instead. If `ocx` is not on `PATH`, the helper stops and prints the install command for your operating system.
 
 Either way you then pick one default model, and **every text model from the 1endpoint catalog is added to that route in the same step** — context windows and image support come from the published catalog, so you do not register models one by one.

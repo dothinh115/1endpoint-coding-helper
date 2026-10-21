@@ -195,8 +195,11 @@ for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'recon
   assert.deepEqual(calls, [])
   assert.equal(keyChecks, 0)
   assert.equal(catalogLoads, 0)
-  assert.ok(text().includes(`${TOOL_INFO[tool].name} is not installed or "${TOOL_INFO[tool].command}" is not on PATH`))
-  assert.match(text(), /Install it first, then reopen your terminal/)
+  // Codex names both installation surfaces; other tools keep the single PATH message.
+  assert.ok(text().includes(tool === 'codex'
+    ? `${TOOL_INFO[tool].name} is not installed: no Codex Desktop app was found in /Applications and "${TOOL_INFO[tool].command}" is not on PATH`
+    : `${TOOL_INFO[tool].name} is not installed or "${TOOL_INFO[tool].command}" is not on PATH`))
+  assert.match(text(), tool === 'codex' ? /reopen your terminal and run coding-helper again/ : /Install it first, then reopen your terminal/)
   assert.ok(text().includes(TOOL_INFO[tool].installUrl))
   assert.doesNotMatch(text(), /Paste API key|Loading public|Select public model/)
   cleanListeners(input, output)
