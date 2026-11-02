@@ -127,16 +127,97 @@ test('sync is reported as failed when the CLI refuses the Codex write', async t 
   assert.match(result.detail, /refused|did not complete/i)
 })
 
-test('runner never puts the key in argv and bounds its output', async t => {
+async function runnerFixture(t) {
   const base = await fs.realpath(os.tmpdir())
   const root = await fs.mkdtemp(path.join(base, 'coding-helper-ocx-run-'))
   t.after(async () => { assert.equal(path.dirname(root), base); await fs.rm(root, { recursive: true, force: true }) })
+  return root
+}
+
+const echoInput = `let data='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({args:process.argv.slice(2),stdin:data}))})\n`
+
+test('runner supports an extensionless shebang and keeps the key in stdin only', async t => {
+  const root = await runnerFixture(t)
   const bin = path.join(root, 'ocx')
-  await fs.writeFile(bin, `#!${process.execPath}\nlet data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({args:process.argv.slice(2),stdin:data}))})\n`, { mode: 0o700 })
+  await fs.writeFile(bin, `#!${process.execPath}\n${echoInput}`, { mode: 0o700 })
   const exec = opencodexRunner({ ocxBin: bin })
-  const result = await exec({ args: ['config', 'import', '-', '--yes'], input: `{"providers":{}}\n` })
+  const args = ['config', 'import', '-', '--yes']
+  const input = `${JSON.stringify({ providers: { '1endpoint': { apiKey: key } } })}\n`
+  const result = await exec({ args, input })
   assert.equal(result.code, 0)
   const payload = JSON.parse(result.stdout)
-  assert.deepEqual(payload.args, ['config', 'import', '-', '--yes'])
-  assert.equal(payload.stdin.includes('providers'), true)
+  assert.deepEqual(payload.args, args)
+  assert.equal(payload.args.some(arg => arg.includes(key)), false)
+  assert.equal(payload.stdin, input)
+})
+
+test('Windows runner uses a real .cmd shim for stdin and secure argv roundtrips in Unicode paths', { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
+  const root = await runnerFixture(t)
+  const directory = path.join(root, 'CLI tools Tiếng Việt 日本語', 'node_modules', '.bin')
+  await fs.mkdir(directory, { recursive: true })
+  const bin = path.join(directory, 'ocx.cmd')
+  await fs.writeFile(path.join(directory, 'ocx.mjs'), echoInput)
+  await fs.writeFile(bin, `@echo off\r\n"${process.execPath}" "%~dp0ocx.mjs" %*\r\n`)
+  const marker = path.join(root, 'must not be created.txt')
+  const args = ['config', 'import', '-', '--yes', 'value with spaces', 'mô hình 日本語', '"quoted value"', `a&echo injected>"${marker}"`, 'pipe|redirect<file>^caret(group)', 'trailing\\']
+  const input = `${JSON.stringify({ providers: { '1endpoint': { apiKey: key } } })}\n`
+  const result = await opencodexRunner({ ocxBin: bin, timeout: 5000 })({ args, input })
+  assert.equal(result.code, 0, result.stderr)
+  const payload = JSON.parse(result.stdout)
+  assert.deepEqual(payload.args, args)
+  assert.equal(payload.args.some(arg => arg.includes(key)), false)
+  assert.equal(payload.stdin, input)
+  await assert.rejects(fs.stat(marker), { code: 'ENOENT' })
+})
+
+// Timeout checks spawn Node directly, never a .cmd shell with a surviving descendant.
+// The child also exits by itself shortly if a regression prevents the parent from killing it.
+const shortChild = ['-e', 'process.stdin.resume(); setTimeout(() => process.exit(0), 1500)']
+
+async function assertRunnerDeadline(t, start, deadline) {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => t.mock.timers.runAll())
+  let settled = false, failure
+  const pending = start().then(
+    () => { settled = true },
+    error => { settled = true; failure = error },
+  )
+  t.mock.timers.tick(deadline - 1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false, 'must not time out before the requested deadline')
+  t.mock.timers.tick(1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, true, 'must time out at the requested deadline')
+  await pending
+  assert.match(failure?.message || '', /OpenCodex command timed out/)
+}
+
+for (const { name, options, request, deadline } of [
+  { name: 'default factory timeout', options: {}, request: {}, deadline: 60000 },
+  { name: 'custom factory timeout', options: { timeout: 80 }, request: {}, deadline: 80 },
+  { name: 'undefined per-call timeout fallback', options: { timeout: 80 }, request: { timeout: undefined }, deadline: 80 },
+  { name: 'shorter per-call timeout', options: { timeout: 80 }, request: { timeout: 20 }, deadline: 20 },
+  { name: 'longer per-call timeout', options: { timeout: 20 }, request: { timeout: 80 }, deadline: 80 },
+]) {
+  test(`runner honors ${name}`, async t => {
+    const exec = opencodexRunner({ ocxBin: process.execPath, ...options })
+    await assertRunnerDeadline(t, () => exec({ args: shortChild, ...request }), deadline)
+  })
+}
+
+test('sync uses its 120000 ms per-call timeout rather than the runner default', async t => {
+  const exec = opencodexRunner({ ocxBin: process.execPath })
+  await assertRunnerDeadline(t, () => syncCodexThroughOpencodex(request => {
+    assert.deepEqual(request.args, ['sync'])
+    return exec({ ...request, args: shortChild })
+  }), 120000)
+})
+
+test('runner rejects safely when a child exits before reading stdin', { timeout: 5000 }, async () => {
+  const exec = opencodexRunner({ ocxBin: process.execPath, timeout: 2000 })
+  await assert.rejects(exec({ args: ['-e', 'process.exit(0)'], input: key + 'x'.repeat(256 * 1024) }), error => {
+    assert.match(error.message, /Could not send input to the OpenCodex CLI/)
+    assert.equal(error.message.includes(key), false)
+    return true
+  })
 })

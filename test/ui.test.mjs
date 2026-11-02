@@ -41,6 +41,23 @@ test('select uses arrows and Enter, restores raw mode and cursor', async () => {
   cleanListeners(input, output)
 })
 
+for (const flowing of [null, false, true]) {
+  for (const prompt of ['select', 'key']) test(`${prompt} restores ${flowing === null ? 'pristine idle' : flowing ? 'flowing' : 'paused'} input without leaking a terminal read`, async () => {
+    const { input, output } = tty()
+    if (flowing === true) input.resume()
+    else if (flowing === false) input.pause()
+    assert.equal(input.readableFlowing, flowing)
+    const pending = prompt === 'select'
+      ? select({ message: 'Choose', choices, input, output })
+      : readApiKey({ input, output })
+    input.write(prompt === 'select' ? '\r' : 'test-token\r')
+    assert.equal(await pending, prompt === 'select' ? false : 'test-token')
+    assert.equal(input.readableFlowing, flowing === true)
+    assert.equal(input.isRaw, false)
+    cleanListeners(input, output)
+  })
+}
+
 test('up arrow wraps and original raw mode is preserved', async () => {
   const { input, output } = tty({ raw: true })
   const pending = select({ message: 'Choose', choices, input, output })
@@ -324,6 +341,9 @@ test('catalog failure has explicit manual recovery; free text only model ID', as
   assert.deepEqual(calls, [['setup', '--tool', 'dsh', '--model', 'manual-model']])
   assert.match(text(), /Public model ID/)
   assert.doesNotMatch(text(), /private detail|y\/n|yes\/no/)
+  assert.equal(input.readableFlowing, false)
+  assert.equal(input.isRaw, false)
+  cleanListeners(input, output)
 })
 
 test('non-TTY selection rejects before attaching listeners', async () => {
@@ -391,7 +411,8 @@ test('setup default paste saves only through dispatch context after explicit con
   await pending
   assert.deepEqual(calls, [{ argv: ['setup', '--tool', 'dsh', '--model', 'model'], context: { language: 'en', apiKey: 'sk-private-test', saveKey: true } }])
   assert.doesNotMatch(text(), /sk-private-test/)
-  assert.match(text(), /plaintext, mode 0600/)
+  assert.match(text(), /Local keys are plaintext; access depends on your account and filesystem permissions/)
+  assert.doesNotMatch(text(), /0600/)
   assert.match(text(), /not encrypted/)
 })
 

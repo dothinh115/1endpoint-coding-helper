@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import JSON5 from 'json5'
+import { fileSymlink } from '../test-support/filesystem.mjs'
 import { applyAgent, inspectAgent, removeAgent, resolveAgentPath } from '../src/native/agents.mjs'
 
 async function fixture(t, tool, original) {
@@ -31,7 +32,7 @@ for (const tool of ['openclaw', 'hermes']) {
     const applied = await applyAgent(f.options)
     assert.equal(applied.configured, true)
     assert.equal(JSON.stringify(applied).includes(f.options.key), false)
-    assert.equal((await fs.stat(f.target)).mode & 0o777, 0o600)
+    if (process.platform !== 'win32') assert.equal((await fs.stat(f.target)).mode & 0o777, 0o600)
     assert.equal((await applyAgent(f.options)).changed, false)
     assert.equal((await inspectAgent(f.options)).drift, false)
     const config = await f.read()
@@ -76,9 +77,15 @@ for (const tool of ['openclaw', 'hermes']) {
     await fs.unlink(f.target)
     const linked = path.join(f.root, 'linked')
     await fs.writeFile(linked, '{}')
-    await fs.symlink(linked, f.target)
-    await assert.rejects(applyAgent(f.options), /symbolic/)
-    await fs.unlink(f.target)
+    await t.test('file symlink is rejected without touching its target', async t => {
+      if (!await fileSymlink(t, linked, f.target)) return
+      try {
+        await assert.rejects(applyAgent(f.options), /symbolic/)
+        assert.equal(await fs.readFile(linked, 'utf8'), '{}')
+      } finally {
+        await fs.unlink(f.target)
+      }
+    })
     await fs.writeFile(path.join(f.options.stateDir, '.setup.lock'), '')
     await assert.rejects(applyAgent(f.options), /active/)
   })
@@ -95,12 +102,14 @@ for (const tool of ['openclaw', 'hermes']) {
 }
 
 test('native home overrides are absolute and platform-aware', () => {
-  assert.equal(resolveAgentPath({ tool: 'openclaw', home: '/home/u', env: {} }), '/home/u/.openclaw/openclaw.json')
-  assert.equal(resolveAgentPath({ tool: 'openclaw', home: '/home/u', env: { OPENCLAW_HOME: '/custom' } }), '/custom/.openclaw/openclaw.json')
-  assert.equal(resolveAgentPath({ tool: 'openclaw', home: '/home/u', env: { OPENCLAW_STATE_DIR: '~/state', OPENCLAW_CONFIG_PATH: '/config/file.json' } }), '/config/file.json')
-  assert.equal(resolveAgentPath({ tool: 'hermes', home: '/home/u', env: { HERMES_HOME: '~/hermes' } }), '/home/u/hermes/config.yaml')
+  for (const platform of ['linux', 'darwin']) {
+    assert.equal(resolveAgentPath({ tool: 'openclaw', platform, home: '/home/u', env: {} }), '/home/u/.openclaw/openclaw.json')
+    assert.equal(resolveAgentPath({ tool: 'openclaw', platform, home: '/home/u', env: { OPENCLAW_HOME: '/custom' } }), '/custom/.openclaw/openclaw.json')
+    assert.equal(resolveAgentPath({ tool: 'openclaw', platform, home: '/home/u', env: { OPENCLAW_STATE_DIR: '~/state', OPENCLAW_CONFIG_PATH: '/config/file.json' } }), '/config/file.json')
+    assert.equal(resolveAgentPath({ tool: 'hermes', platform, home: '/home/u', env: { HERMES_HOME: '~/hermes' } }), '/home/u/hermes/config.yaml')
+    for (const tool of ['openclaw', 'hermes']) assert.throws(() => resolveAgentPath({ tool, platform, home: '/home/u', env: { OPENCLAW_STATE_DIR: 'relative', HERMES_HOME: 'relative' } }), /absolute/)
+  }
   assert.equal(resolveAgentPath({ tool: 'hermes', platform: 'win32', home: 'C:\\Users\\u', env: { LOCALAPPDATA: 'C:\\Local' } }), 'C:\\Local\\hermes\\config.yaml')
-  for (const tool of ['openclaw', 'hermes']) assert.throws(() => resolveAgentPath({ tool, home: '/home/u', env: { OPENCLAW_STATE_DIR: 'relative', HERMES_HOME: 'relative' } }), /absolute/)
 })
 
 test('OpenClaw refuses implicit legacy-path shadowing', async t => {

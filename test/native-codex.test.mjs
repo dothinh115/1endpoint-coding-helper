@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { parse } from 'smol-toml'
-import { applyCodex, inspectCodex, removeCodex, patchCodexToml, buildCatalog, resolveCodexPaths, PROVIDER_ID, BASE_URL } from '../src/native/codex.mjs'
+import { applyCodex, inspectCodex, removeCodex, patchCodexToml, buildCatalog, readCatalogTemplate, resolveCodexPaths, PROVIDER_ID, BASE_URL } from '../src/native/codex.mjs'
 
 const key = 'sk-fixture-key-never-real'
 const model = 'public-model'
@@ -21,7 +23,7 @@ async function fixture(t, initial) {
     assert.equal(path.dirname(root), base)
     await fs.rm(root, { recursive: true, force: true })
   })
-  const options = { stateDir, env: { HOME: home }, home, platform: 'darwin' }
+  const options = { stateDir, env: { HOME: home }, home, platform: process.platform }
   return { root, home, stateDir, options, configPath: path.join(home, '.codex', 'config.toml'), catalogPath: path.join(home, '.codex', '1endpoint-models.json') }
 }
 
@@ -123,6 +125,106 @@ test('catalog carries published metadata only and never invents reasoning suppor
   assert.equal(buildCatalog(models, null), null)
   assert.equal(buildCatalog([], template), null)
   assert.equal(buildCatalog([{ id: 'image-model', type: 'image' }], template), null)
+})
+
+async function assertCatalogHomeRemoved(home) {
+  assert.equal(path.isAbsolute(home), true)
+  assert.match(path.basename(home), /^coding-helper-codex-catalog-/)
+  // Cleanup is intentionally asynchronous, even though the catalog probe is synchronous.
+  for (let attempt = 0; attempt < 100 && existsSync(home); attempt++) await delay(10)
+  assert.equal(existsSync(home), false, 'the isolated catalog home must be removed')
+}
+
+test('catalog probe preserves the injected spawn contract and cleans its isolated CODEX_HOME', async () => {
+  let home
+  const inheritedHome = process.env.CODEX_HOME
+  const result = readCatalogTemplate({
+    codexBin: 'installed-codex',
+    timeout: 3210,
+    spawn(command, args, options) {
+      assert.equal(command, 'installed-codex')
+      assert.deepEqual(args, ['debug', 'models'])
+      assert.equal(options.shell, false)
+      assert.equal(options.windowsHide, true)
+      assert.equal(options.encoding, 'utf8')
+      assert.equal(options.timeout, 3210)
+      assert.equal(options.maxBuffer, 16 * 1024 * 1024)
+      assert.deepEqual(options.stdio, ['ignore', 'pipe', 'ignore'])
+      home = options.env.CODEX_HOME
+      assert.notEqual(home, inheritedHome)
+      assert.deepEqual(options.env, { ...process.env, CODEX_HOME: home })
+      assert.deepEqual(readdirSync(home), [])
+      writeFileSync(path.join(home, 'probe-created-file'), 'must be cleaned')
+      return { status: 0, stdout: JSON.stringify({ models: [{ slug: 'no-messages' }, { ...template, slug: 'installed-model', context_window: 999 }] }) }
+    },
+  })
+  assert.deepEqual(result, template)
+  assert.equal(process.env.CODEX_HOME, inheritedHome)
+  await assertCatalogHomeRemoved(home)
+})
+
+test('catalog probe safely rejects malformed results, failures and timeouts and cleans each home', async () => {
+  const valid = JSON.stringify({ models: [template] })
+  const failures = [
+    ['missing result', () => undefined],
+    ['null result', () => null],
+    ['nonzero exit', () => ({ status: 1, stdout: valid })],
+    ['missing exit status', () => ({ stdout: valid })],
+    ['timeout', () => ({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('private error'), { code: 'ETIMEDOUT' }), stdout: valid })],
+    ['spawn error despite exit status', () => ({ status: 0, error: new Error('private error'), stdout: valid })],
+    ['signal despite exit status', () => ({ status: 0, signal: 'SIGTERM', stdout: valid })],
+    ['buffer output', () => ({ status: 0, stdout: Buffer.from(valid) })],
+    ['oversized output', () => ({ status: 0, stdout: ' '.repeat(16 * 1024 * 1024 + 1) })],
+    ['malformed JSON', () => ({ status: 0, stdout: '{private invalid JSON' })],
+    ['null payload', () => ({ status: 0, stdout: 'null' })],
+    ['invalid models', () => ({ status: 0, stdout: '{"models":{}}' })],
+    ['missing template', () => ({ status: 0, stdout: '{"models":[null,{"model_messages":[]}]}' })],
+    ['thrown runner error', () => { throw new Error('private error') }],
+  ]
+  for (const [label, run] of failures) {
+    let home
+    assert.equal(readCatalogTemplate({
+      codexBin: 'installed-codex',
+      spawn(command, args, options) {
+        home = options.env.CODEX_HOME
+        assert.equal(existsSync(home), true)
+        writeFileSync(path.join(home, 'probe-created-file'), 'must be cleaned on failure too')
+        return run()
+      },
+    }), null, label)
+    await assertCatalogHomeRemoved(home)
+  }
+  for (const codexBin of [undefined, null, '', 123]) {
+    assert.equal(readCatalogTemplate({ codexBin, spawn() { assert.fail('invalid commands must not run') } }), null)
+  }
+})
+
+test('default catalog runner reads a real Windows npm .cmd shim in a path with spaces and Unicode', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t)
+  const bin = path.join(f.root, 'npm shim đường 模型')
+  await fs.mkdir(bin)
+  const command = path.join(bin, 'codex.cmd')
+  const observed = path.join(bin, 'observed.json')
+  await fs.writeFile(path.join(bin, 'catalog.mjs'), `
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+assert.deepEqual(process.argv.slice(2), ['debug', 'models'])
+const home = process.env.CODEX_HOME
+assert.deepEqual(fs.readdirSync(home), [])
+fs.writeFileSync(new URL('observed.json', import.meta.url), JSON.stringify({ home, args: process.argv.slice(2) }))
+fs.writeFileSync(path.join(home, 'probe-created-file'), 'must be cleaned')
+process.stdout.write(JSON.stringify({ models: [{ ...${JSON.stringify(template)}, slug: 'installed-only', context_window: 999 }] }))
+`)
+  // Like an npm shim, forward arguments and use an absolute Node path (which itself has spaces).
+  await fs.writeFile(command, `@"${process.execPath}" "%~dp0catalog.mjs" %*\r\n`)
+  const result = readCatalogTemplate({ codexBin: command })
+  assert.deepEqual(result, template)
+  const recorded = JSON.parse(await fs.readFile(observed, 'utf8'))
+  assert.deepEqual(recorded.args, ['debug', 'models'])
+  assert.notEqual(recorded.home, process.env.CODEX_HOME)
+  assert.notEqual(recorded.home, f.home)
+  await assertCatalogHomeRemoved(recorded.home)
 })
 
 test('apply writes config, catalog and a private journal; repeat apply is idempotent', async t => {

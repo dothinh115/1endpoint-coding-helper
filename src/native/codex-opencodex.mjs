@@ -14,7 +14,7 @@ const validKey = value => typeof value === 'string' && value.length > 0 && value
 
 /** Spawn the user's installed OpenCodex CLI; secrets travel only through stdin. */
 export function opencodexRunner({ ocxBin, env = process.env, timeout = 60000 } = {}) {
-  return ({ args, input }) => new Promise((resolve, reject) => {
+  return ({ args, input, timeout: callTimeout = timeout }) => new Promise((resolve, reject) => {
     let child
     try { child = spawn(ocxBin, args, { stdio: ['pipe', 'pipe', 'pipe'], env, shell: false, windowsHide: true }) }
     catch { reject(new Error('Could not start the OpenCodex CLI.')); return }
@@ -29,8 +29,12 @@ export function opencodexRunner({ ocxBin, env = process.env, timeout = 60000 } =
     const timer = setTimeout(() => {
       try { child.kill() } catch {}
       finish(new Error('OpenCodex command timed out.'))
-    }, timeout)
+    }, callTimeout)
     child.once('error', () => finish(new Error('Could not start the OpenCodex CLI.')))
+    child.stdin.on('error', () => {
+      try { child.kill() } catch {}
+      finish(new Error('Could not send input to the OpenCodex CLI.'))
+    })
     child.stdout.on('data', chunk => {
       size += chunk.length
       if (size > MAX_BYTES) { try { child.kill() } catch {}; finish(new Error('OpenCodex command returned too much output.')); return }

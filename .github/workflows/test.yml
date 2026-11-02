@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.19.0', '26']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install locked dependencies
+        run: npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn install --immutable
+      - name: Check syntax
+        run: npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn check
+      - name: Run tests
+        run: npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn test
+      - name: Install isolated Windows console test tooling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: npm install --prefix "$env:RUNNER_TEMP/helper-console-tools" --no-audit --no-fund --ignore-scripts node-pty@1.1.0
+      - name: Check actual Windows console exit
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CODING_HELPER_TEST_NODE_PTY = "$env:RUNNER_TEMP/helper-console-tools/node_modules/node-pty"
+          node --test test/windows-terminal.test.mjs

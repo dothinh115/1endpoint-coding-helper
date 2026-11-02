@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import crossSpawn from 'cross-spawn';
 import YAML from 'yaml';
+import { fileSymlink } from '../test-support/filesystem.mjs';
 import { applyDsh, removeDsh, inspectDsh, resolveDshPaths } from '../src/native/dsh.mjs';
 
 async function fixture(t) {
@@ -20,12 +21,14 @@ function parsed(text) { return YAML.parse(text, { logLevel: 'silent' }); }
 const baseline = `# Keep this comment\n- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  config:\n    extra: true\n    providers:\n      other:\n        api: openai-completions\n        baseURL: https://example.invalid/v1\n        models: [{id: other-model}]\n- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: other\n    model: other-model\n    reasoningEffort: high\n- id: unrelated\n  name: '@example/unrelated'\n  config: {answer: 42}\n`;
 
 test('resolver is pure and uses POSIX and native Windows paths', () => {
-  assert.equal(resolveDshPaths({ home: '/users/test', stateDir: '/state', env: {} }).home, '/users/test/.dsh');
-  assert.equal(resolveDshPaths({ home: '/users/test', stateDir: '/state', env: { DSH_HOME: '~/custom' } }).home, '/users/test/custom');
+  for (const platform of ['linux', 'darwin']) {
+    assert.equal(resolveDshPaths({ home: '/users/test', stateDir: '/state', env: {}, platform }).home, '/users/test/.dsh');
+    assert.equal(resolveDshPaths({ home: '/users/test', stateDir: '/state', env: { DSH_HOME: '~/custom' }, platform }).home, '/users/test/custom');
+  }
   const win = resolveDshPaths({ home: 'C:\\Users\\test', stateDir: 'D:\\state', env: {}, platform: 'win32', profile: 'acp' });
   assert.equal(win.home, 'C:\\Users\\test\\.dsh');
   assert.equal(win.profilePatch, 'C:\\Users\\test\\.dsh\\profiles\\acp\\cordis.patch.yml');
-  assert.throws(() => resolveDshPaths({ stateDir: '/s', profile: '../escape' }));
+  assert.throws(() => resolveDshPaths({ stateDir: '/s', profile: '../escape', platform: 'linux' }));
 });
 
 test('apply preserves comments, provider lists, names and defaults; updates retain original baseline', async t => {
@@ -42,8 +45,10 @@ test('apply preserves comments, provider lists, names and defaults; updates reta
   assert.equal(entries[1].config.reasoningEffort, 'high');
   assert.equal(entries[1].name, '@deepseek-ai/dsh-agent-default-model');
   assert.equal(entries[1].config.model, options.model);
-  assert.equal((await fs.stat(paths.journal)).mode & 0o777, 0o600);
-  assert.equal((await fs.stat(paths.envFile)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') {
+    assert.equal((await fs.stat(paths.journal)).mode & 0o777, 0o600);
+    assert.equal((await fs.stat(paths.envFile)).mode & 0o777, 0o600);
+  }
   await applyDsh({ ...options, model: 'next-model', key: 'new-private-key' });
   assert.equal((await inspectDsh(options)).model, 'next-model');
   await removeDsh(options);
@@ -87,16 +92,32 @@ test('malformed config, credential precedence, links and setup lock fail closed'
   await assert.rejects(applyDsh(options), /credential document/);
   await assert.rejects(inspectDsh(options), /credential document/);
   await fs.unlink(paths.credentials);
-  await put(path.join(root, 'linked'), '[]\n');
+  const linked = path.join(root, 'linked');
+  await put(linked, '[]\n');
   await fs.unlink(paths.profilePatch);
-  await fs.symlink(path.join(root, 'linked'), paths.profilePatch);
-  await assert.rejects(applyDsh(options), /linked/);
-  await fs.unlink(paths.profilePatch);
-  await fs.link(path.join(root, 'linked'), paths.profilePatch);
-  await assert.rejects(applyDsh(options), /linked/);
-  await fs.unlink(paths.profilePatch);
-  await put(paths.lock, '');
-  await assert.rejects(applyDsh(options), /locked/);
+  await t.test('file symlink is rejected without touching its target', async t => {
+    if (!await fileSymlink(t, linked, paths.profilePatch)) return;
+    try {
+      await assert.rejects(applyDsh(options), /linked/);
+      assert.equal(await fs.readFile(linked, 'utf8'), '[]\n');
+    } finally {
+      await fs.unlink(paths.profilePatch);
+    }
+  });
+  await t.test('hardlink is rejected without touching its target', async () => {
+    await fs.link(linked, paths.profilePatch);
+    try {
+      await assert.rejects(applyDsh(options), /linked/);
+      assert.equal(await fs.readFile(linked, 'utf8'), '[]\n');
+    } finally {
+      await fs.unlink(paths.profilePatch);
+    }
+  });
+  await t.test('setup lock still excludes writers', async () => {
+    await put(paths.lock, '');
+    await assert.rejects(applyDsh(options), /locked/);
+    assert.equal(await fs.readFile(paths.lock, 'utf8'), '');
+  });
 });
 
 test('drift retains recovery journal and force restores only owned fields', async t => {
@@ -170,12 +191,12 @@ test('target or journal write failure atomically rolls back all completed change
 });
 
 test('installed native dsh --dump-config composes BEFORE/AFTER without any provider request', async t => {
-  const available = spawnSync('dsh', ['--version'], { encoding: 'utf8' });
+  const available = crossSpawn.sync('dsh', ['--version'], { encoding: 'utf8' });
   if (available.error?.code === 'ENOENT') return t.skip('DSH executable not installed');
   assert.equal(available.status, 0, available.stderr);
   const { options, paths } = await fixture(t);
   const dump = () => {
-    const result = spawnSync('dsh', ['--profile', 'web', '--dump-config'], { encoding: 'utf8', env: { ...process.env, HOME: options.home, DSH_HOME: paths.home } });
+    const result = crossSpawn.sync('dsh', ['--profile', 'web', '--dump-config'], { encoding: 'utf8', env: { ...process.env, HOME: options.home, USERPROFILE: options.home, DSH_HOME: paths.home } });
     assert.equal(result.status, 0, result.stderr);
     return parsed(result.stdout);
   };

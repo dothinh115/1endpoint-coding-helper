@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import crossSpawn from 'cross-spawn'
 import { parse } from 'smol-toml'
 import { snapshot, atomicReplace, withNativeLock } from './store.mjs'
 
@@ -190,21 +190,23 @@ export function patchCodexToml(text, values, label = 'Codex configuration') {
  * Read the installed Codex client's own catalog as the template for generated entries, so a
  * custom model keeps Codex's instructions and tool contract instead of an invented one.
  */
-export function readCatalogTemplate({ codexBin, spawn = spawnSync, timeout = 30000 } = {}) {
+export function readCatalogTemplate({ codexBin, spawn = crossSpawn.sync, timeout = 30000 } = {}) {
   if (typeof codexBin !== 'string' || !codexBin) return null
   const home = path.join(os.tmpdir(), `coding-helper-codex-catalog-${randomUUID()}`)
   try {
     // The client refuses a CODEX_HOME that does not exist, so the isolated home must be created.
     mkdirSync(home, { recursive: true, mode: 0o700 })
+    // Let cross-spawn safely escape Windows npm .cmd shims; keep command and arguments separate.
     const result = spawn(codexBin, ['debug', 'models'], {
       encoding: 'utf8',
       timeout,
       maxBuffer: 16 * 1024 * 1024,
+      shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: { ...process.env, CODEX_HOME: home },
     })
-    if (!result || result.status !== 0 || typeof result.stdout !== 'string' || result.stdout.length > 16 * 1024 * 1024) return null
+    if (!result || result.error || result.signal || result.status !== 0 || typeof result.stdout !== 'string' || result.stdout.length > 16 * 1024 * 1024) return null
     const payload = JSON.parse(result.stdout)
     const entry = Array.isArray(payload?.models) ? payload.models.find(model => object(model?.model_messages)) : null
     if (!entry) return null

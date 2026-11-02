@@ -16,6 +16,14 @@ Run this in your terminal:
 npx @1endpoint/coding-helper
 ```
 
+On **Windows PowerShell**, use the npm command shim explicitly if `npx.ps1` is blocked by the execution policy:
+
+```powershell
+npx.cmd @1endpoint/coding-helper
+```
+
+This does not require changing your PowerShell execution policy. The same `npx.cmd` prefix works for the scripted commands below. Reopen your terminal after installing Node.js so its commands are on `PATH`.
+
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
 3. Select the tool you want to configure. Before Setup or Reconfigure continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
@@ -220,6 +228,7 @@ For another shell, use its secure environment-variable mechanism or your secret 
 | Problem | What to do |
 | --- | --- |
 | Node version error | Install Node.js 22.19 or newer, then reopen your terminal. |
+| PowerShell blocks `npx.ps1` | Run `npx.cmd @1endpoint/coding-helper` instead; no execution-policy change is needed. |
 | CLI not found | Install the selected coding tool and put its executable on your `PATH`. |
 | API key missing | Open the helper and paste a key, or select Open Console to create one. It is saved on confirmation. |
 | Catalog unavailable | Choose Retry, or explicitly enter a known public model ID. |
@@ -232,6 +241,22 @@ For another shell, use its secure environment-variable mechanism or your secret 
 | Authentication or model request fails | Confirm key, model access and balance in 1endpoint. Doctor does not validate server-side access. |
 
 This is an independent integration, not an official DeepSeek or Anthropic product.
+
+## Development and tests
+
+Use Node.js 22.19 or newer and the Yarn version pinned in `package.json`:
+
+```bash
+npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn install --immutable
+npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn check
+npm exec --yes --package=@yarnpkg/cli-dist@4.17.0 -- yarn test
+```
+
+In Windows PowerShell, use `npm.cmd` instead of `npm` if script execution is restricted. Run the checked-out CLI with `node src/cli.mjs`; `npx @1endpoint/coding-helper` runs the published package, not your local changes.
+
+CI runs on Windows and Linux with Node.js 22.19 and 26. The Windows jobs also run the actual CLI in ConPTY to verify that Exit and Escape release the terminal. To run those console checks locally, install `node-pty@1.1.0` in a separate tooling directory and set `CODING_HELPER_TEST_NODE_PTY` to its absolute module path, then run `node --test test/windows-terminal.test.mjs`.
+
+POSIX permission checks do not apply to Windows ACLs. File-symlink cases require Windows Developer Mode or symlink privileges and report a skip when unavailable; directory-junction and hardlink safety checks still run. Real-tool integration cases need their respective tools installed; a passing mocked lifecycle test does not validate a live provider or API key.
 
 ## More help
 

@@ -21,6 +21,17 @@ function uiError(cancelled = false) {
 }
 const clean = text => String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
 
+function preserveInputState(input) {
+  const wasRaw = Boolean(input.isRaw)
+  // A pristine stdin has readableFlowing === null but isPaused() === false.
+  // Leaving it resumed keeps the Windows TTY read handle alive after a prompt.
+  const wasFlowing = input.readableFlowing === true
+  return () => {
+    try { input.setRawMode(wasRaw) } catch {}
+    try { if (wasFlowing) input.resume(); else input.pause() } catch {}
+  }
+}
+
 /** The command a user runs after setup; kept here so both entry points agree. */
 function startCommand(tool) {
   return tool === 'dsh' ? 'dsh web' : tool === 'openclaw' ? 'openclaw tui' : TOOL_INFO[tool].command
@@ -34,8 +45,7 @@ export async function select({ message, choices, input = process.stdin, output =
   if (!Array.isArray(choices) || !choices.length || choices.some(choice => !choice || typeof choice.label !== 'string')) {
     throw new Error('Selection requires labeled choices.')
   }
-  const wasRaw = Boolean(input.isRaw)
-  const wasPaused = typeof input.isPaused === 'function' && input.isPaused()
+  const restoreInput = preserveInputState(input)
   let index = 0, rendered = false, buffer = '', timer, settled = false
   const pageSize = Math.min(choices.length, 8, Math.max(1, (output.rows || 24) - 4))
   let renderedLines = 0
@@ -60,8 +70,7 @@ export async function select({ message, choices, input = process.stdin, output =
       input.off('end', onFailure)
       input.off('close', onFailure)
       output.off('error', onFailure)
-      try { input.setRawMode(wasRaw) } catch {}
-      try { if (wasPaused) input.pause() } catch {}
+      restoreInput()
       try { output.write('\u001b[?25h') } catch {}
     }
     const finish = (error, value) => {
@@ -140,7 +149,7 @@ export async function select({ message, choices, input = process.stdin, output =
 /** Masked single-token entry. Bracketed paste is buffered until its end marker. */
 export async function readApiKey({ input = process.stdin, output = process.stdout, language = 'en' } = {}) {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') throw uiError()
-  const wasRaw = Boolean(input.isRaw), wasPaused = input.isPaused?.()
+  const restoreInput = preserveInputState(input)
   let value = '', buffer = '', pasting = false, pasted = '', settled = false, timer
   return new Promise((resolve, reject) => {
     const finish = (error, result) => {
@@ -149,8 +158,7 @@ export async function readApiKey({ input = process.stdin, output = process.stdou
       clearTimeout(timer)
       for (const event of ['data', 'error', 'end', 'close']) input.off(event, event === 'data' ? onData : onFailure)
       output.off('error', onFailure)
-      try { input.setRawMode(wasRaw) } catch {}
-      try { if (wasPaused) input.pause() } catch {}
+      restoreInput()
       try { output.write('\u001b[?2004l\n') } catch {}
       value = ''; pasted = ''; buffer = ''
       if (error) reject(error)
@@ -213,6 +221,7 @@ export async function readApiKey({ input = process.stdin, output = process.stdou
 }
 
 async function modelQuestion(input, output, language = 'en') {
+  const restoreInput = preserveInputState(input)
   const controller = new AbortController()
   const terminal = createInterface({ input, output, terminal: true })
   const abort = () => controller.abort()
@@ -233,6 +242,7 @@ async function modelQuestion(input, output, language = 'en') {
     input.off('close', abort)
     terminal.off('SIGINT', abort)
     terminal.close()
+    restoreInput()
   }
 }
 
@@ -305,7 +315,7 @@ export async function wizard({ dispatch, input = process.stdin, output = process
           if (error.code !== 'UI_INVALID_KEY') throw error
           output.write(error.message + '\n'); continue
         }
-        output.write(t('Local keys are plaintext, mode 0600: accessible to your user account, not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần, quyền 0600: tài khoản của bạn có thể đọc, không được mã hóa.\n'))
+        output.write(t('Local keys are plaintext; access depends on your account and filesystem permissions. They are not encrypted.\n', 'Khóa cục bộ ở dạng văn bản thuần; quyền truy cập phụ thuộc tài khoản và hệ thống tệp. Khóa không được mã hóa.\n'))
         context.apiKey = key; context.saveKey = true
         break
       }

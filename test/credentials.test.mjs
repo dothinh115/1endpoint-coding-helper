@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { getCredential, saveCredential, removeCredential, credentialExists } from '../src/credentials.mjs'
+import { directoryLink, fileSymlink } from '../test-support/filesystem.mjs'
 
 const fakeKey = 'test-only-fake-token-not-a-real-api-key'
 const posix = process.platform !== 'win32'
@@ -135,17 +136,19 @@ test('atomic-write failure preserves old credential and cleans temporary files a
 })
 
 test('symlink and hardlink credential targets are rejected without touching targets', async t => {
-  const options = await fixture(t)
-  const outside = path.join(options.stateDir, 'outside')
-  await fs.writeFile(outside, fakeKey, { mode: 0o600 })
-  await fs.mkdir(path.dirname(savedFile(options)), { mode: 0o700 })
-  for (const create of [() => fs.symlink(outside, savedFile(options)), () => fs.link(outside, savedFile(options))]) {
-    await create()
+  for (const kind of ['symlink', 'hardlink']) await t.test(kind, async t => {
+    const options = await fixture(t)
+    const outside = path.join(options.stateDir, 'outside')
+    await fs.writeFile(outside, fakeKey, { mode: 0o600 })
+    await fs.mkdir(path.dirname(savedFile(options)), { mode: 0o700 })
+    if (kind === 'symlink') {
+      if (!await fileSymlink(t, outside, savedFile(options))) return
+    } else await fs.link(outside, savedFile(options))
     for (const operation of [() => getCredential(options), () => saveCredential({ ...options, key: 'replacement-fake' }), () => removeCredential(options), () => removeCredential({ ...options, dryRun: true })]) await assert.rejects(operation())
     assert.equal(await fs.readFile(outside, 'utf8'), fakeKey)
     assert.equal(savedFile(options), path.join(options.stateDir, 'credentials', 'dsh.json'))
     await fs.unlink(savedFile(options))
-  }
+  })
 })
 
 test('symlink state/credential directories and lock are rejected', async t => {
@@ -153,14 +156,14 @@ test('symlink state/credential directories and lock are rejected', async t => {
   const real = path.join(options.stateDir, 'real')
   const linked = path.join(options.stateDir, 'linked')
   await fs.mkdir(real, { mode: 0o700 })
-  await fs.symlink(real, linked)
+  await directoryLink(real, linked)
   await assert.rejects(saveCredential({ ...options, stateDir: linked, key: fakeKey }))
   await assert.rejects(getCredential({ ...options, stateDir: linked }))
-  await fs.symlink(real, path.join(options.stateDir, 'credentials'))
+  await directoryLink(real, path.join(options.stateDir, 'credentials'))
   await assert.rejects(saveCredential({ ...options, key: fakeKey }))
   await assert.rejects(getCredential(options))
   const second = await fixture(t)
-  await fs.symlink(real, path.join(second.stateDir, '.setup.lock'))
+  await directoryLink(real, path.join(second.stateDir, '.setup.lock'))
   await assert.rejects(saveCredential({ ...second, key: fakeKey }))
   assert.deepEqual(await fs.readdir(real), [])
 })

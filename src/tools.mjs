@@ -24,8 +24,11 @@ export const OPENCODEX = {
 }
 
 export async function findExecutable(command, env = process.env) {
-  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
-  for (const directory of (env.PATH || '').split(path.delimiter)) {
+  const windows = process.platform === 'win32'
+  const extensions = windows ? ['.exe', '.cmd', '.bat', ''] : ['']
+  const pathKey = windows ? Object.keys(env).find(name => name.toUpperCase() === 'PATH') : 'PATH'
+  for (let directory of (env[pathKey] || '').split(path.delimiter)) {
+    if (windows && directory.startsWith('"') && directory.endsWith('"')) directory = directory.slice(1, -1)
     if (!directory) continue
     for (const suffix of extensions) {
       const file = path.resolve(directory, command + suffix)

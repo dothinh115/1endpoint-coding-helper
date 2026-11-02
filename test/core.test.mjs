@@ -4,9 +4,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import spawn from 'cross-spawn'
 import http from 'node:http'
 import YAML from 'yaml'
+import { directoryLink, fileSymlink } from '../test-support/filesystem.mjs'
 import { setup, reconfigure, remove, backup, loadState, stateRoot, planFor, validateModel, assertSafePath } from '../src/state.mjs'
 import { createClaudePlan, MODEL_VARIABLES } from '../src/adapters/claude.mjs'
 import { parse } from '../src/cli.mjs'
@@ -54,14 +55,20 @@ async function cliEnv(root) {
   await fs.mkdir(home, { recursive: true })
   const bin = path.join(root, 'installed-bin')
   await fs.mkdir(bin)
-  for (const tool of ['dsh', 'claude']) await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\nprocess.exit(0)\n`, { mode: 0o700 })
-  return { PATH: bin, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), CLAUDE_CONFIG_DIR: path.join(root, 'native-claude'), DSH_HOME: path.join(root, 'native-dsh'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
+  for (const tool of ['dsh', 'claude']) {
+    const windows = process.platform === 'win32'
+    await fs.writeFile(path.join(bin, tool + (windows ? '.cmd' : '')), windows ? '@echo off\r\nexit /b 0\r\n' : `#!${process.execPath}\nprocess.exit(0)\n`, { mode: 0o700 })
+  }
+  const env = { PATH: bin, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), CLAUDE_CONFIG_DIR: path.join(root, 'native-claude'), DSH_HOME: path.join(root, 'native-dsh'), ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), ONEENDPOINT_API_KEY: secret }
+  if (process.platform === 'win32' && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot
+  return env
 }
 
 test('model validation accepts public IDs and refuses injection or ambiguous IDs', () => {
   for (const model of ['gpt-5', 'anthropic/claude-sonnet-4.6', 'team:model+rev_1', 'x'.repeat(200)]) assert.equal(validateModel(model), model)
   for (const model of [undefined, null, 1, '', '-flag', 'has space', 'x\ny', 'x\0y', 'x"', '../escape', 'x'.repeat(201)]) assert.throws(() => validateModel(model))
-  assert.equal(stateRoot({ ONEENDPOINT_HELPER_HOME: '/tmp/isolated-helper' }), '/tmp/isolated-helper')
+  const isolated = path.resolve(os.tmpdir(), 'isolated-helper')
+  assert.equal(stateRoot({ ONEENDPOINT_HELPER_HOME: isolated }), isolated)
   assert.throws(() => planFor({ stateDir: '/tmp', tool: 'unknown', model: 'x' }))
 })
 
@@ -81,8 +88,10 @@ for (const tool of ['claude', 'dsh']) {
     assert.deepEqual(await snapshot(home), before)
     const { state, plan } = await loadState(stateDir, tool)
     assert.equal(state.model, 'public/model')
-    for (const file of [...plan.files.map(file => file.path), path.join(stateDir, `${tool}.json`)]) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
-    assert.equal((await fs.stat(stateDir)).mode & 0o777, 0o700)
+    if (process.platform !== 'win32') {
+      for (const file of [...plan.files.map(file => file.path), path.join(stateDir, `${tool}.json`)]) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+      assert.equal((await fs.stat(stateDir)).mode & 0o777, 0o700)
+    }
     assert.ok(!JSON.stringify(await snapshot(stateDir)).includes(secret))
   })
 
@@ -101,7 +110,7 @@ for (const tool of ['claude', 'dsh']) {
     const bytes = await fs.readFile(saved, 'utf8'), parsed = JSON.parse(bytes)
     assert.equal(parsed.model, 'model-a')
     assert.deepEqual(parsed.files, planFor({ stateDir, tool, model: 'model-a' }).files)
-    assert.equal((await fs.stat(saved)).mode & 0o777, 0o600)
+    if (process.platform !== 'win32') assert.equal((await fs.stat(saved)).mode & 0o777, 0o600)
     await setup({ stateDir, tool, model: 'model-b', update: true })
     assert.equal((await loadState(stateDir, tool)).state.model, 'model-b')
     assert.equal(await fs.readFile(saved, 'utf8'), bytes)
@@ -143,10 +152,14 @@ for (const tool of ['claude', 'dsh']) {
 
 test('symlink state roots, ancestors, manifests, generated files and backup dirs are refused', async t => {
   const root = await fixture(t), real = path.join(root, 'real'), linked = path.join(root, 'linked')
-  await fs.mkdir(real); await fs.symlink(real, linked)
-  await assert.rejects(assertSafePath(path.join(linked, 'nested')), /symbolic link/)
-  await assert.rejects(setup({ stateDir: linked, tool: 'claude', model: 'x' }), /symbolic link/)
-  for (const kind of ['manifest', 'file', 'backups']) {
+  await fs.mkdir(real)
+  await t.test('state roots and linked ancestors', async () => {
+    await directoryLink(real, linked)
+    await assert.rejects(assertSafePath(path.join(linked, 'nested')), /symbolic link/)
+    await assert.rejects(setup({ stateDir: linked, tool: 'claude', model: 'x' }), /symbolic link/)
+    assert.deepEqual(await snapshot(real), {})
+  })
+  for (const kind of ['manifest', 'file', 'backups']) await t.test(kind, async t => {
     const stateDir = path.join(root, kind)
     await setup({ stateDir, tool: 'claude', model: 'x' })
     const target = kind === 'manifest' ? path.join(stateDir, 'claude.json') : kind === 'file' ? planFor({ stateDir, tool: 'claude', model: 'x' }).files[0].path : path.join(stateDir, 'backups')
@@ -154,12 +167,15 @@ test('symlink state roots, ancestors, manifests, generated files and backup dirs
     if (kind !== 'backups') {
       await fs.copyFile(target, external)
       assert.ok(target.startsWith(root + path.sep)); await fs.unlink(target)
-    } else await fs.mkdir(external)
-    await fs.symlink(external, target)
+      if (!await fileSymlink(t, external, target)) return
+    } else {
+      await fs.mkdir(external)
+      await directoryLink(external, target)
+    }
     const before = await snapshot(real)
     await assert.rejects(kind === 'backups' ? backup({ stateDir, tool: 'claude' }) : loadState(stateDir, 'claude'), /symbolic link/)
     assert.deepEqual(await snapshot(real), before)
-  }
+  })
 })
 
 test('exclusive setup lock refuses concurrent writers/backups and never removes someone else lock', async t => {
@@ -212,20 +228,30 @@ for (const tool of ['claude', 'dsh']) {
     assert.ok(!JSON.stringify(await snapshot(stateDir)).includes(secret))
     assert.equal((await remove({ stateDir, tool, yes: true })).changed, false)
     await setup({ stateDir, tool, model: 'fresh' })
-    const outside = path.join(root, 'outside'); await fs.writeFile(outside, 'keep')
-    assert.ok(target.startsWith(root + path.sep)); await fs.unlink(target)
-    await fs.symlink(outside, target)
-    await assert.rejects(remove({ stateDir, tool, yes: true, force: true }), /symbolic link/)
-    assert.equal(await fs.readFile(outside, 'utf8'), 'keep')
+    await t.test('forced removal refuses a file symlink without touching its target', async t => {
+      const outside = path.join(root, 'outside'); await fs.writeFile(outside, 'keep')
+      assert.ok(target.startsWith(root + path.sep)); await fs.unlink(target)
+      if (!await fileSymlink(t, outside, target)) return
+      await assert.rejects(remove({ stateDir, tool, yes: true, force: true }), /symbolic link/)
+      assert.equal(await fs.readFile(outside, 'utf8'), 'keep')
+    })
   })
 }
 
-test('CLI package-bin symlink invocation executes help/version', async t => {
-  const root = await fixture(t), env = await cliEnv(root), linked = path.join(root, 'coding-helper')
-  await fs.symlink(cli, linked)
-  const result = await run(process.execPath, [linked, '--version'], { env })
-  assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^\d+\.\d+\.\d+/)
+test('CLI package-bin symlink or Windows shim invocation executes help/version', async t => {
+  const root = await fixture(t), env = await cliEnv(root)
+  const bin = path.join(root, 'installed package', 'node_modules', '.bin')
+  await fs.mkdir(bin, { recursive: true })
+  const windows = process.platform === 'win32'
+  const linked = path.join(bin, 'coding-helper' + (windows ? '.cmd' : ''))
+  if (windows) await fs.writeFile(linked, `@echo off\r\n"${process.execPath}" "${cli}" %*\r\n`)
+  else await fs.symlink(cli, linked, 'file')
+  for (const flag of ['--help', '--version']) {
+    const result = await run(windows ? linked : process.execPath, windows ? [flag] : [linked, flag], { env })
+    assert.equal(result.code, 0, result.stderr)
+    if (flag === '--version') assert.match(result.stdout, /^\d+\.\d+\.\d+/)
+    else assert.match(result.stdout, /coding-helper/)
+  }
 })
 
 test('CLI lifecycle commands confirm deletion and automatically back up model changes', async t => {

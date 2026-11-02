@@ -4,7 +4,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
-import { spawn } from 'node:child_process'
+import spawn from 'cross-spawn'
+import { directoryLink, fileSymlink } from '../test-support/filesystem.mjs'
 import { applyClaude, removeClaude, inspectClaude, resolveClaudePath, CONFLICTING_ENV } from '../src/native/claude.mjs'
 import { atomicReplace, commitPair, snapshot, serialize } from '../src/native/store.mjs'
 
@@ -54,8 +55,10 @@ test('safe merge, private journal, role selection, and full per-field restoratio
   for (const key of CONFLICTING_ENV) assert.equal(Object.hasOwn(settings.env, key), false)
   assert.equal(Object.hasOwn(settings, 'apiKeyHelper'), false)
   assert.deepEqual(settings.hooks, original.hooks)
-  assert.equal((await fs.stat(f.journal)).mode & 0o777, 0o600)
-  assert.equal((await fs.stat(f.target)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') {
+    assert.equal((await fs.stat(f.journal)).mode & 0o777, 0o600)
+    assert.equal((await fs.stat(f.target)).mode & 0o777, 0o600)
+  }
   const inspect = await inspectClaude(f.options)
   assert.equal(inspect.drift, false)
   assert.equal(JSON.stringify(inspect).includes('sensitive'), false)
@@ -201,36 +204,44 @@ test('cooperating .setup.lock excludes native writers', async t => {
 })
 
 test('symbolic links, linked ancestors, and hardlinks are rejected without writes', async t => {
-  for (const kind of ['symlink', 'hardlink', 'ancestor']) {
+  for (const kind of ['symlink', 'hardlink', 'ancestor']) await t.test(kind, async t => {
     const f = await fixture(t)
     const external = path.join(f.root, 'external')
     await fs.mkdir(external)
     const externalFile = path.join(external, 'settings.json')
     await fs.writeFile(externalFile, '{}')
     await fs.mkdir(f.options.home, { recursive: true })
-    if (kind === 'ancestor') await fs.symlink(external, path.dirname(f.target), 'dir')
+    if (kind === 'ancestor') await directoryLink(external, path.dirname(f.target))
     else {
       await fs.mkdir(path.dirname(f.target))
-      if (kind === 'symlink') await fs.symlink(externalFile, f.target)
-      else await fs.link(externalFile, f.target)
+      if (kind === 'symlink') {
+        if (!await fileSymlink(t, externalFile, f.target)) return
+      } else await fs.link(externalFile, f.target)
     }
     await assert.rejects(applyClaude(f.options), /symbolic|hardlinked/)
     assert.equal(await fs.readFile(externalFile, 'utf8'), '{}')
-  }
+  })
 })
 
-test('unsafe journals and state ancestors are rejected', async t => {
-  const f = await fixture(t)
-  await applyClaude(f.options)
-  const privateRaw = await fs.readFile(f.journal, 'utf8')
-  const external = path.join(f.root, 'journal-copy')
-  await fs.writeFile(external, privateRaw)
-  await fs.unlink(f.journal)
-  await fs.symlink(external, f.journal)
-  await assert.rejects(removeClaude({ ...f.options, force: true }), /symbolic/)
-  await fs.unlink(f.journal)
-  await fs.link(external, f.journal)
-  await assert.rejects(inspectClaude(f.options), /hardlinked/)
+test('unsafe linked journals are rejected', async t => {
+  for (const kind of ['symlink', 'hardlink']) await t.test(kind, async t => {
+    const f = await fixture(t)
+    await applyClaude(f.options)
+    const privateRaw = await fs.readFile(f.journal, 'utf8')
+    const nativeRaw = await fs.readFile(f.target, 'utf8')
+    const external = path.join(f.root, 'journal-copy')
+    await fs.writeFile(external, privateRaw)
+    await fs.unlink(f.journal)
+    if (kind === 'symlink') {
+      if (!await fileSymlink(t, external, f.journal)) return
+      await assert.rejects(removeClaude({ ...f.options, force: true }), /symbolic/)
+    } else {
+      await fs.link(external, f.journal)
+      await assert.rejects(inspectClaude(f.options), /hardlinked/)
+    }
+    assert.equal(await fs.readFile(external, 'utf8'), privateRaw)
+    assert.equal(await fs.readFile(f.target, 'utf8'), nativeRaw)
+  })
 })
 
 test('atomic replacement detects concurrent edits before writing', async t => {

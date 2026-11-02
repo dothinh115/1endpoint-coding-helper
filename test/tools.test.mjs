@@ -41,6 +41,45 @@ test('executable lookup respects PATH order without running the tool', async t =
   assert.equal(await findExecutable('dsh', { PATH: second }), path.join(second, 'dsh' + suffix))
 })
 
+test('Windows executable lookup reads PATH case-insensitively from custom environments', { skip: process.platform !== 'win32' }, async t => {
+  const root = await fixture(t)
+  await fs.writeFile(path.join(root, 'dsh.CMD'), 'not executable program content')
+  for (const name of ['PATH', 'Path', 'pAtH']) {
+    assert.equal(await findExecutable('dsh', { [name]: root }), path.join(root, 'dsh.cmd'), name)
+  }
+})
+
+test('Windows executable lookup unquotes PATH entries with spaces and Unicode in order', { skip: process.platform !== 'win32' }, async t => {
+  const root = await fixture(t)
+  const first = path.join(root, 'first tools Tiếng Việt'), second = path.join(root, 'second tools 日本語')
+  for (const directory of [first, second]) {
+    await fs.mkdir(directory)
+    await fs.writeFile(path.join(directory, 'ocx.CMD'), 'not executable program content')
+  }
+  assert.equal(await findExecutable('ocx', { PATH: `;"";"${first}";"${second}";` }), path.join(first, 'ocx.cmd'))
+  assert.equal(await findExecutable('ocx', { Path: `"${second}";"${first}"` }), path.join(second, 'ocx.cmd'))
+})
+
+test('Windows executable lookup keeps supported extension order for uppercase filenames', { skip: process.platform !== 'win32' }, async t => {
+  const root = await fixture(t)
+  for (const suffix of ['.EXE', '.CMD', '.BAT', '']) await fs.writeFile(path.join(root, 'dsh' + suffix), 'not executable program content')
+  const env = { PATH: root, PATHEXT: '.CMD;.EXE;.BAT' }
+  for (const suffix of ['.exe', '.cmd', '.bat', '']) {
+    assert.equal(await findExecutable('dsh', env), path.join(root, 'dsh' + suffix))
+    await fs.unlink(path.join(root, 'dsh' + suffix))
+  }
+})
+
+test('POSIX executable lookup keeps PATH case-sensitive and quotes literal', { skip: process.platform === 'win32' }, async t => {
+  const root = await fixture(t)
+  const directory = path.join(root, '"tools with spaces Tiếng Việt"')
+  await fs.mkdir(directory)
+  const bin = path.join(directory, 'dsh')
+  await fs.writeFile(bin, 'not executable program content', { mode: 0o700 })
+  assert.equal(await findExecutable('dsh', { Path: directory }), null)
+  assert.equal(await findExecutable('dsh', { PATH: directory }), bin)
+})
+
 test('non-executable files do not count as installed on POSIX', { skip: process.platform === 'win32' }, async t => {
   const root = await fixture(t)
   await fs.writeFile(path.join(root, 'claude'), 'not executable', { mode: 0o600 })
