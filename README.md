@@ -5,7 +5,7 @@ Connect **Codex**, **DeepSeek Harness (DSH)**, **Claude Code**, **OpenClaw** or 
 ## Before you start
 
 - Install **Node.js 22.19 or newer**.
-- Install the tool you want to configure first: [Codex](https://learn.chatgpt.com/docs), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Follow its own runtime requirements too. The helper configures tools; it does not install them.
+- The helper writes the tool's own user configuration, so the tool itself does not need to be installed first: [Codex](https://learn.chatgpt.com/docs), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Claude Code](https://code.), [OpenClaw](https://docs.openclaw.ai/start/getting-started) or [Hermes](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Install the tool before launching it and follow its own runtime requirements too. The helper configures tools; it does not install them.
 - Have a 1endpoint API key ready. Keep it private: do not paste it into command arguments, shared configuration files or a repository.
 
 ## 1. Set up your tool
@@ -26,7 +26,7 @@ This does not require changing your PowerShell execution policy. The same `npx.c
 
 1. Choose **English** or **Tiếng Việt**.
 2. Choose **Setup**.
-3. Select the tool you want to configure. Before Setup or Reconfigure continues, the helper checks for the selected executable on `PATH`. If it is missing, install the tool using the displayed official guide, reopen your terminal and run the helper again. No key is requested or configuration written while this check fails.
+3. Select the tool you want to configure. Setup writes the tool's native user configuration without checking whether the executable is installed yet; install the tool using the official guide before launching it. The OpenCodex route is the only exception: it needs `ocx` on `PATH`.
 4. Paste your key into the **masked API-key prompt**, or select **Open Console** and press Enter to create one first. If a saved key is available, choose **Use an existing key** to reuse it.
 5. Select models from the 1endpoint catalog.
 6. Review the selection, then choose **Confirm**. The key is saved automatically and the tool's native user configuration is updated.
@@ -41,7 +41,7 @@ Most text uses your terminal's default color. Cyan marks the current choice, yel
 
 For Codex, first choose how Codex should reach 1endpoint:
 
-- **Direct configuration file** writes `~/.codex/config.toml` and a helper-owned model catalog. Codex keeps its own login; no extra software is needed. A Desktop-only installation works: when `codex` is not on `PATH`, the helper uses the CLI bundled inside `ChatGPT.app` (or `Codex.app`), which reads the same file.
+- **Direct configuration file** writes `~/.codex/config.toml` and a helper-owned model catalog. Codex keeps its own login; no extra software is needed, and no Codex installation is required to write the file. When a Codex client is available, the helper takes the catalog template from it; otherwise it falls back to a generic template and says so.
 - **OpenCodex** writes the 1endpoint provider into an installed [OpenCodex](https://github.com/lidge-jun/opencodex/releases/latest) proxy instead. If `ocx` is not on `PATH`, the helper stops and prints the install command for your operating system.
 
 Either way you then pick one default model, and **every text model from the 1endpoint catalog is added to that route in the same step** — context windows and image support come from the published catalog, so you do not register models one by one.
@@ -229,13 +229,13 @@ For another shell, use its secure environment-variable mechanism or your secret 
 | --- | --- |
 | Node version error | Install Node.js 22.19 or newer, then reopen your terminal. |
 | PowerShell blocks `npx.ps1` | Run `npx.cmd @1endpoint/coding-helper` instead; no execution-policy change is needed. |
-| CLI not found | Install the selected coding tool and put its executable on your `PATH`. |
+| CLI not found | Setup does not need it; install the selected coding tool and put its executable on `PATH` before launching, then rerun Doctor. |
 | API key missing | Open the helper and paste a key, or select Open Console to create one. It is saved on confirmation. |
 | Catalog unavailable | Choose Retry, or explicitly enter a known public model ID. |
 | New model is not taking effect | Restart the tool; check Doctor for project, environment or managed overrides and check custom path/profile variables. |
 | Older setup only works through the helper | Rerun Setup with the same mapping and saved key, or Reconfigure, then restart and launch normally. |
 | Managed configuration drift | Review the changes; reconcile them or preview explicit limited force removal before setting up again. |
-| Codex shows no 1endpoint models | Run Doctor. A direct setup needs the installed Codex client to read its own catalog template, and the OpenCodex route needs `ocx start` plus `ocx sync` before Codex sees the models. |
+| Codex shows no 1endpoint models | Run Doctor. A direct setup writes the catalog even without a Codex installation but falls back to a generic template, so install Codex and rerun Setup to use its real template; the OpenCodex route needs `ocx start` plus `ocx sync` before Codex sees the models. |
 | `ocx` not found when choosing OpenCodex | Install OpenCodex (`npm install -g @bitkyc08/opencodex`, or the release for your OS), reopen the terminal and run the helper again. |
 | Codex requests fail with `invalid_reasoning_effort` | Your own `config.toml` sets a reasoning effort this model does not support. Remove `model_reasoning_effort` or pick a supported level; the generated catalog declares no reasoning levels. |
 | Authentication or model request fails | Confirm key, model access and balance in 1endpoint. Doctor does not validate server-side access. |

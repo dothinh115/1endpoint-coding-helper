@@ -16,20 +16,23 @@ function run(args, env) {
     child.on('close', code => resolve({ code, stdout, stderr }))
   })
 }
-for (const tool of ['openclaw', 'hermes']) test(`${tool}: full CLI lifecycle and installation preflight`, async t => {
+for (const tool of ['openclaw', 'hermes']) test(`${tool}: full CLI lifecycle without an installation preflight`, async t => {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'agents-cli-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const bin = path.join(root, 'bin')
   await fs.mkdir(bin)
   const env = { PATH: bin, HOME: root, USERPROFILE: root, ONEENDPOINT_HELPER_HOME: path.join(root, 'state'), OPENCLAW_STATE_DIR: path.join(root, 'openclaw'), HERMES_HOME: path.join(root, 'hermes'), ONEENDPOINT_API_KEY: 'dummy-cli-agent-key' }
-  for (const command of ['setup', 'reconfigure']) {
-    const result = await run([command, '--tool', tool, '--model', 'fixture-model'], env)
-    assert.equal(result.code, 1)
-    assert.match(result.stderr, /Install it first/)
-    await assert.rejects(fs.stat(env.ONEENDPOINT_HELPER_HOME), { code: 'ENOENT' })
+  // Configuration is written before the tool exists; Doctor reports the missing executable.
+  for (const [command, extra] of [['setup', ['--model', 'fixture-model']], ['reconfigure', ['--model', 'next-model']]]) {
+    const result = await run([command, '--tool', tool, ...extra], env)
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal((result.stdout + result.stderr).includes(env.ONEENDPOINT_API_KEY), false)
   }
+  const missingCli = await run(['doctor', '--tool', tool], env)
+  assert.equal(missingCli.code, 1)
+  assert.match(missingCli.stdout, /not on PATH/)
   await fs.writeFile(path.join(bin, tool), `#!${process.execPath}\nprocess.exit(0)\n`, { mode: 0o700 })
-  for (const [command, extra] of [['setup', ['--model', 'fixture-model']], ['doctor', []], ['backup', []], ['reconfigure', ['--model', 'next-model']]]) {
+  for (const [command, extra] of [['doctor', []], ['backup', []]]) {
     const result = await run([command, '--tool', tool, ...extra], env)
     assert.equal(result.code, 0, result.stderr)
     assert.equal((result.stdout + result.stderr).includes(env.ONEENDPOINT_API_KEY), false)

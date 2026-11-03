@@ -4,7 +4,7 @@ import { PassThrough, Writable } from 'node:stream'
 import { TOOL_INFO } from '../src/tools.mjs'
 import { select, colorize, wizard as terminalWizard, readApiKey } from '../src/ui.mjs'
 
-const wizard = options => terminalWizard({ isToolInstalled: async () => true, isOpencodexInstalled: async () => true, ...options })
+const wizard = options => terminalWizard({ isOpencodexInstalled: async () => true, ...options })
 
 function tty({ raw = false } = {}) {
   const input = new PassThrough()
@@ -196,47 +196,24 @@ test('wizard Doctor chooses tool using arrows and dispatches CLI argv', async ()
   assert.doesNotMatch(text(), /yes\/no|y\/n/i)
 })
 
-for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'reconfigure']) test(`${action} checks ${tool} installation before asking for keys or models`, async () => {
+for (const tool of Object.keys(TOOL_INFO)) for (const action of ['setup', 'reconfigure']) test(`${action} writes ${tool} configuration without checking for an installed executable`, async () => {
   const { input, output, text } = tty()
-  const checked = [], calls = []
-  let keyChecks = 0, catalogLoads = 0
-  const pending = wizard({ input, output, isToolInstalled: async selected => { checked.push(selected); return false },
-    isOpencodexInstalled: async () => true,
-    getKeyStatus: async () => { keyChecks++; return { available: true } },
-    loadModels: async () => { catalogLoads++; return [{ id: 'model' }] }, dispatch: argv => calls.push(argv) })
-  // Codex asks for its route before the installation check.
-  await keys(input, '\r', pickAction(action), pickTool(tool), ...(tool === 'codex' ? ['\r'] : []))
-  if (!checked.length) input.write('\u0003')
+  const calls = []
+  const pending = wizard({ input, output, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'model' }], dispatch: (argv, context) => calls.push({ argv, context }) })
+  // Codex asks for its route first; Claude asks for its tiers before the model prompts.
+  const modelPicks = tool === 'claude' ? ['\r', '\r', '\r', '\r'] : ['\r']
+  await keys(input, '\r', pickAction(action), pickTool(tool), ...(tool === 'codex' ? ['\r'] : []), useExistingKey, ...modelPicks, '\u001b[B\r')
   await pending
-  assert.deepEqual(checked, [tool])
-  assert.deepEqual(calls, [])
-  assert.equal(keyChecks, 0)
-  assert.equal(catalogLoads, 0)
-  // Codex names both installation surfaces; other tools keep the single PATH message.
-  assert.ok(text().includes(tool === 'codex'
-    ? `${TOOL_INFO[tool].name} is not installed: no Codex Desktop app was found in /Applications and "${TOOL_INFO[tool].command}" is not on PATH`
-    : `${TOOL_INFO[tool].name} is not installed or "${TOOL_INFO[tool].command}" is not on PATH`))
-  assert.match(text(), tool === 'codex' ? /reopen your terminal and run coding-helper again/ : /Install it first, then reopen your terminal/)
-  assert.ok(text().includes(TOOL_INFO[tool].installUrl))
-  assert.doesNotMatch(text(), /Paste API key|Loading public|Select public model/)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].argv.slice(0, 3), [action, '--tool', tool])
+  assert.doesNotMatch(text(), /is not installed|not on PATH|Install it first/)
   cleanListeners(input, output)
-})
-
-test('missing-tool guidance is localized in Vietnamese', async () => {
-  const { input, output, text } = tty()
-  let checked = false
-  const pending = wizard({ input, output, isToolInstalled: async () => { checked = true; return false }, dispatch: () => assert.fail('must not dispatch') })
-  await keys(input, '\u001b[B\r', pickAction('setup'), pickTool('dsh'))
-  if (!checked) input.write('\u0003')
-  await pending
-  assert.match(text(), /Chưa cài DeepSeek Harness \(DSH\) hoặc không tìm thấy lệnh "dsh" trên PATH/)
-  assert.match(text(), /Cài đặt công cụ trước, sau đó mở lại terminal/)
 })
 
 for (const action of ['doctor', 'remove']) test(`${action} remains available without an installed CLI`, async () => {
   const { input, output } = tty()
   const calls = []
-  const pending = wizard({ input, output, isToolInstalled: async () => assert.fail('cleanup and diagnostics do not require installation'), dispatch: argv => calls.push(argv) })
+  const pending = wizard({ input, output, dispatch: argv => calls.push(argv) })
   await keys(input, '\r', pickAction(action), pickTool('dsh'))
   if (action === 'remove') await keys(input, '\u001b[B\r', '\r', '\u001b[B\r')
   await pending
@@ -477,7 +454,7 @@ for (const columns of [80, 120]) test(`menu wraps full Vietnamese/model labels a
 for (const tool of ['openclaw', 'hermes']) test(`${tool} wizard selects one model and dispatches native setup`, async () => {
   const { input, output, text } = tty()
   const calls = []
-  const pending = wizard({ input, output, isToolInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'public-model' }], dispatch: argv => calls.push(argv) })
+  const pending = wizard({ input, output, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'public-model' }], dispatch: argv => calls.push(argv) })
   await keys(input, '\r', pickAction('setup'), pickTool(tool), useExistingKey, '\r', '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [['setup', '--tool', tool, '--model', 'public-model']])
@@ -490,7 +467,7 @@ test('Codex asks for a route, blocks an uninstalled OpenCodex, and forwards the 
   const { input, output, text } = tty()
   const calls = []
   const catalog = [{ id: 'first-model', name: 'First', contextWindow: 1000000, vision: true }, { id: 'second-model', name: 'Second', contextWindow: 500000, vision: false }]
-  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => false, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
+  const pending = wizard({ input, output, isOpencodexInstalled: async () => false, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
   await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\u001b[B\r')
   await pending
   assert.deepEqual(calls, [])
@@ -502,7 +479,7 @@ test('Codex direct setup selects one model and forwards every catalog model', as
   const { input, output } = tty()
   const calls = []
   const catalog = [{ id: 'first-model', name: 'First', contextWindow: 1000000, vision: true }, { id: 'second-model', name: 'Second', contextWindow: 500000, vision: false }]
-  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
+  const pending = wizard({ input, output, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => catalog, dispatch: (argv, context) => calls.push({ argv, context }) })
   await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\r', useExistingKey, '\u001b[B\r', '\u001b[B\r')
   await pending
   assert.equal(calls.length, 1)
@@ -514,7 +491,7 @@ test('Codex direct setup selects one model and forwards every catalog model', as
 test('Codex OpenCodex setup runs when the proxy is installed', async () => {
   const { input, output } = tty()
   const calls = []
-  const pending = wizard({ input, output, isToolInstalled: async () => true, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'model' }], dispatch: (argv, context) => calls.push({ argv, context }) })
+  const pending = wizard({ input, output, isOpencodexInstalled: async () => true, getKeyStatus: async () => ({ available: true }), loadModels: async () => [{ id: 'model' }], dispatch: (argv, context) => calls.push({ argv, context }) })
   await keys(input, '\r', pickAction('setup'), pickTool('codex'), '\u001b[B\r', useExistingKey, '\r', '\u001b[B\r')
   await pending
   assert.equal(calls.length, 1)

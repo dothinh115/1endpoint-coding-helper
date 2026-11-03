@@ -11,7 +11,7 @@ import { applyCodex, removeCodex, inspectCodex, readCatalogTemplate } from './na
 import { applyOpencodex, inspectOpencodex, removeOpencodex, opencodexRunner, opencodexLiveness, syncCodexThroughOpencodex, opencodexDashboardUrl } from './native/codex-opencodex.mjs'
 import { nativeWarnings } from './native/diagnostics.mjs'
 import { applyAgent, removeAgent, inspectAgent } from './native/agents.mjs'
-import { findExecutable, findCodex, findOpencodex, TOOL_INFO, OPENCODEX, missingToolMessage, opencodexInstallMessage } from './tools.mjs'
+import { findExecutable, findCodex, findOpencodex, TOOL_INFO, OPENCODEX, missingExecutableWarning, opencodexInstallMessage } from './tools.mjs'
 import { fetchModels } from './catalog.mjs'
 
 const HELP = `@1endpoint/coding-helper — native 1endpoint coding-tool setup
@@ -150,7 +150,6 @@ async function main(argv, context = {}) {
   const ocxBin = tool === 'codex' ? await findOpencodex() : null
   if (tool === 'codex') {
     if (['setup', 'reconfigure'].includes(command)) {
-      if (!codexBin) throw new Error(missingToolMessage('codex', context.language))
       if (route === 'opencodex' && !ocxBin) throw new Error(opencodexInstallMessage(context.language))
       // Both routes own the same Codex client through different mechanisms, so they are exclusive.
       const other = route === 'opencodex' ? 'native/codex.json' : 'native/opencodex.json'
@@ -158,10 +157,8 @@ async function main(argv, context = {}) {
         throw new Error(t(`The other Codex route is already configured. Run remove --tool codex first, then set up this route.`, `Codex đang được cấu hình theo cách kia. Chạy remove --tool codex trước, rồi cấu hình lại theo cách này.`))
       }
     }
-  } else {
-    const bin = ['setup', 'reconfigure', 'doctor'].includes(command) ? await findExecutable(TOOL_INFO[tool].command) : null
-    if (['setup', 'reconfigure'].includes(command) && !bin) throw new Error(missingToolMessage(tool, context.language))
-    if (command === 'doctor' && !bin) console.log(colorize(missingToolMessage(tool, context.language), 'warning'))
+  } else if (command === 'doctor') {
+    if (!await findExecutable(TOOL_INFO[tool].command)) console.log(colorize(missingExecutableWarning(tool, context.language), 'warning'))
   }
   const native = nativeFor({ tool, route, stateDir, model: state?.model || options['--model'], roles: state?.roles, profile: options['--profile'], models: context.models || [], codexBin, ocxBin })
   if (command === 'remove') {

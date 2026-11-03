@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises'
 import { fetchModels } from './catalog.mjs'
 import { openConsole } from './browser.mjs'
 import * as claudeAdapter from './adapters/claude.mjs'
-import { findExecutable, findOpencodex, TOOL_INFO, missingToolMessage, opencodexInstallMessage } from './tools.mjs'
+import { findOpencodex, TOOL_INFO, opencodexInstallMessage } from './tools.mjs'
 
 const palette = { selected: 36, warning: 33, error: 31 }
 
@@ -247,7 +247,7 @@ async function modelQuestion(input, output, language = 'en') {
 }
 
 /** Gather CLI arguments only. State and tool execution belong to dispatch. */
-export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), isToolInstalled = async tool => Boolean(await findExecutable(TOOL_INFO[tool].command)), isOpencodexInstalled = async () => Boolean(await findOpencodex()), openConsole: openBrowser = openConsole }) {
+export async function wizard({ dispatch, input = process.stdin, output = process.stdout, loadModels = fetchModels, getKeyStatus = async () => ({ available: false }), isOpencodexInstalled = async () => Boolean(await findOpencodex()), openConsole: openBrowser = openConsole }) {
   if (typeof dispatch !== 'function') throw new Error('Wizard requires a CLI dispatcher.')
   let language = 'en'
   const t = (en, vi) => language === 'vi' ? vi : en
@@ -283,13 +283,6 @@ export async function wizard({ dispatch, input = process.stdin, output = process
         output.write(colorize(opencodexInstallMessage(language), 'warning', { output }) + '\n')
         return
       }
-      if (route === 'direct' && !await isToolInstalled('codex')) {
-        output.write(colorize(missingToolMessage('codex', language), 'warning', { output }) + '\n')
-        return
-      }
-    } else if (['setup', 'reconfigure'].includes(action) && !await isToolInstalled(tool)) {
-      output.write(colorize(missingToolMessage(tool, language), 'warning', { output }) + '\n')
-      return
     }
     if (['setup', 'reconfigure'].includes(action)) {
       let available = false

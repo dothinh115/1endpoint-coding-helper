@@ -298,22 +298,18 @@ test('Claude maps all model roles through the native settings file', () => {
   assert.deepEqual(plan.args.slice(0, 2), ['--setting-sources', 'user'])
 })
 
-for (const tool of ['dsh', 'claude']) test(`${tool}: missing CLI rejects setup/reconfigure before reading or writing user state`, async t => {
+for (const tool of ['dsh', 'claude']) test(`${tool}: setup and reconfigure do not require the CLI to be installed`, async t => {
   const root = await fixture(t), env = await cliEnv(root)
   const bin = path.join(root, 'empty-bin')
   await fs.mkdir(bin)
   env.PATH = bin
-  const before = await snapshot(root)
   for (const args of [['setup', '--model', 'public-model'], ['reconfigure', '--model', 'public-model']]) {
     const result = await run(process.execPath, [cli, ...args, '--tool', tool], { env })
-    assert.equal(result.code, 1)
-    assert.match(result.stderr, /is not installed or/)
-    assert.match(result.stderr, /Install it first/)
-    assert.ok(result.stderr.includes(tool === 'dsh' ? 'DeepSeek Harness (DSH)' : 'Claude Code'))
-    assert.ok(result.stderr.includes(tool === 'dsh' ? 'https://github.com/deepseek-ai/deepseek-harness' : 'https://code.claude.com/docs/en/overview'))
-    assert.ok(!result.stderr.includes(secret))
-    assert.deepEqual(await snapshot(root), before)
+    assert.equal(result.code, 0, result.stderr)
+    assert.doesNotMatch(result.stdout + result.stderr, /is not installed|not on PATH|Install it first/)
+    assert.ok(!(result.stdout + result.stderr).includes(secret))
   }
+  assert.equal((await loadState(env.ONEENDPOINT_HELPER_HOME, tool)).state.model, 'public-model')
   const removal = await run(process.execPath, [cli, 'remove', '--tool', tool, '--yes'], { env })
   assert.equal(removal.code, 0, removal.stderr)
 })

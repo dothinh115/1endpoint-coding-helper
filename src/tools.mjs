@@ -69,7 +69,7 @@ async function isExecutable(file) {
   } catch { return false }
 }
 
-/** Resolve the Codex client used for preflight and for the catalog template. */
+/** Resolve the Codex client used as the catalog-template source; configuration setup does not require it. */
 export async function findCodex({ env = process.env, home = os.homedir(), platform = process.platform, applicationRoots } = {}) {
   const terminal = await findExecutable(TOOL_INFO.codex.command, env)
   for (const candidate of codexDesktopCandidates({ platform, home, applicationRoots })) {
@@ -78,19 +78,12 @@ export async function findCodex({ env = process.env, home = os.homedir(), platfo
   return terminal ? { command: terminal, surface: 'terminal', terminal } : { command: null, surface: null, terminal: null }
 }
 
-export function missingToolMessage(tool, language = 'en') {
+/** Configuration setup never blocks on an uninstalled executable; Doctor reports one as a warning. */
+export function missingExecutableWarning(tool, language = 'en') {
   const { name, command, installUrl } = TOOL_INFO[tool]
-  const detail = tool === 'codex'
-    ? { en: 'Install Codex Desktop or the Codex CLI first', vi: 'Cài Codex Desktop hoặc Codex CLI trước' }
-    : null
-  if (language === 'vi') {
-    return detail
-      ? `Chưa cài ${name}: không tìm thấy ứng dụng Codex Desktop trong /Applications hay lệnh "${command}" trên PATH. ${detail.vi}, sau đó mở lại terminal và chạy lại coding-helper. Hướng dẫn cài đặt: ${installUrl}`
-      : `Chưa cài ${name} hoặc không tìm thấy lệnh "${command}" trên PATH. Cài đặt công cụ trước, sau đó mở lại terminal và chạy lại coding-helper. Hướng dẫn cài đặt: ${installUrl}`
-  }
-  return detail
-    ? `${name} is not installed: no Codex Desktop app was found in /Applications and "${command}" is not on PATH. ${detail.en}, then reopen your terminal and run coding-helper again. Installation guide: ${installUrl}`
-    : `${name} is not installed or "${command}" is not on PATH. Install it first, then reopen your terminal and run coding-helper again. Installation guide: ${installUrl}`
+  return language === 'vi'
+    ? `Không tìm thấy lệnh "${command}" trên PATH. Cấu hình vẫn được áp dụng; hãy cài ${name} trước khi chạy công cụ. Hướng dẫn cài đặt: ${installUrl}`
+    : `"${command}" is not on PATH. Configuration is still applied; install ${name} before launching it. Installation guide: ${installUrl}`
 }
 
 /** Per-platform install guidance for the OpenCodex proxy; the helper never installs it itself. */

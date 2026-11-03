@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { findExecutable, findCodex, TOOL_INFO, missingToolMessage } from '../src/tools.mjs'
+import { findExecutable, findCodex, TOOL_INFO, missingExecutableWarning } from '../src/tools.mjs'
 
 async function fixture(t) {
   const base = await fs.realpath(os.tmpdir())
@@ -115,9 +115,9 @@ test('Codex detection finds the Desktop app bundle as well as the terminal execu
   assert.deepEqual(await findCodex({ env: { PATH: bin }, home, platform: 'linux', applicationRoots: [path.join(home, 'Applications')] }), { command: terminal, surface: 'terminal', terminal })
 })
 
-test('missing Codex guidance names both installation surfaces', () => {
-  assert.match(missingToolMessage('codex', 'en'), /Codex Desktop app was found in \/Applications/)
-  assert.match(missingToolMessage('codex', 'en'), /Install Codex Desktop or the Codex CLI/)
-  assert.match(missingToolMessage('codex', 'vi'), /Cài Codex Desktop hoặc Codex CLI trước/)
-  assert.match(missingToolMessage('dsh', 'en'), /not on PATH/)
+test('missing executable guidance is a launch warning, not a setup gate', () => {
+  assert.match(missingExecutableWarning('codex', 'en'), /"codex" is not on PATH/)
+  assert.match(missingExecutableWarning('codex', 'en'), /Configuration is still applied/)
+  assert.match(missingExecutableWarning('codex', 'vi'), /Không tìm thấy lệnh "codex" trên PATH/)
+  assert.match(missingExecutableWarning('dsh', 'en'), /Installation guide: https:\/\/github.com\/deepseek-ai\/deepseek-harness/)
 })
